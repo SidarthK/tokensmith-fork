@@ -89,6 +89,12 @@ def pytest_addoption(parser):
         default=None,
         help="System prompt mode (overrides config)"
     )
+    group.addoption(
+        "--rerank-mode",
+        choices=["none", "cross_encoder", "coverage_mmr"],
+        default=None,
+        help="Reranking mode override for benchmark experiments"
+    )
     
     # === Testing Options ===
     group.addoption(
@@ -105,6 +111,11 @@ def pytest_addoption(parser):
         "--benchmark-ids",
         default=None,
         help="Comma-separated list of benchmark IDs to run (e.g., 'transactions,er_modeling')"
+    )
+    group.addoption(
+        "--benchmarks-file",
+        default=None,
+        help="Path to benchmark YAML file (default: tests/benchmarks.yaml)"
     )
     group.addoption(
         "--metrics",
@@ -150,7 +161,7 @@ def config(pytestconfig):
         "ensemble_method": cfg.get("ensemble_method", "rrf"),
         "rrf_k": cfg.get("rrf_k", 60),
         "ranker_weights": cfg.get("ranker_weights", {"faiss":0.6,"bm25":0.4}),
-        "rerank_mode": cfg.get("rerank_mode", "none"),
+        "rerank_mode": pytestconfig.getoption("--rerank-mode") or cfg.get("rerank_mode", "none"),
         "rerank_top_k": cfg.get("rerank_top_k", 5),
         "seg_filter": cfg.get("seg_filter", None),
         "chunk_mode": cfg.get("chunk_mode", "sections"),
@@ -204,7 +215,11 @@ def benchmarks(pytestconfig, config):
     
     Optionally filters by benchmark IDs if specified.
     """
-    benchmark_file = Path(__file__).parent / "benchmarks.yaml"
+    benchmark_file_cli = pytestconfig.getoption("--benchmarks-file")
+    if benchmark_file_cli:
+        benchmark_file = Path(benchmark_file_cli)
+    else:
+        benchmark_file = Path(__file__).parent / "benchmarks.yaml"
     with open(benchmark_file) as f:
         data = yaml.safe_load(f)
     

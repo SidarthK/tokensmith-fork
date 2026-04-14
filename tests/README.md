@@ -86,6 +86,8 @@ All config options can be overridden via CLI (CLI takes priority):
 | Argument | Options | Description |
 |----------|---------|-------------|
 | `--benchmark-ids` | comma-separated | Filter specific benchmarks (e.g., "test,transactions") |
+| `--benchmarks-file` | path | Use an alternate benchmark file (e.g., `tests/benchmarks_multihop.yaml`) |
+| `--rerank-mode` | none, cross_encoder, coverage_mmr | Override reranker mode for comparison runs |
 | `--system_prompt_mode` | baseline, tutor, concise, detailed | System prompt style |
 | `--enable-chunks` | flag | Enable chunks in generation (RAG mode) |
 | `--disable-chunks` | flag | Disable chunks (baseline mode) |
@@ -201,6 +203,16 @@ for mode in baseline tutor concise detailed; do
     pytest tests/ --system_prompt_mode=$mode --benchmark-ids="test" -s
 done
 ```
+
+### Compare Baseline vs Coverage-Aware Reranking
+
+```bash
+bash scripts/run_rerank_comparison.sh
+```
+
+This writes side-by-side run logs to:
+- `tests/results/baseline_rerank_multihop.txt`
+- `tests/results/coverage_mmr_multihop.txt`
 
 ### Component Isolation (Ablation Study)
 
