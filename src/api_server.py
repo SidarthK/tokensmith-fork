@@ -35,6 +35,7 @@ from src.feedback_store import (
 )
 from src.instrumentation.logging import get_logger
 from src.ranking.ranker import EnsembleRanker
+from src.ranking.reranker import rerank
 from src.retriever import filter_retrieved_chunks, BM25Retriever, FAISSRetriever, IndexKeywordRetriever, get_page_numbers, load_artifacts
 from src.user_feedback_model import TopicExtractor, estimate_difficulty
 
@@ -104,7 +105,7 @@ def _ensure_initialized():
         )
 
 def _create_log(chunks , sources , topk_idxs, ordered_ranked_scores, page_nums, full_response_accumulator, request,
-                 enable_chunks, prompt_type, max_chunks, temperature):
+                 enable_chunks, prompt_type, max_chunks, temperature, additional_log_info: Optional[Dict] = None):
     try:
         # Capture the actual strings used for the log file
         log_chunks = [chunks[i] for i in topk_idxs[:max_chunks]]
@@ -138,7 +139,8 @@ def _create_log(chunks , sources , topk_idxs, ordered_ranked_scores, page_nums, 
             sources=log_sources,
             page_map=page_nums,
             full_response="".join(full_response_accumulator),
-            top_k=max_chunks
+            top_k=max_chunks,
+            additional_log_info=additional_log_info
         )
 
         return True
@@ -164,7 +166,25 @@ def _retrieve_and_rank(query: str, top_k: Optional[int] = None):
         ordered_ids = ordered_ids[:_config.top_k]
         ordered_scores = ordered_scores[:_config.top_k]
 
-    return ordered_ids, ordered_scores
+    rerank_info = {"rerank_mode": _config.rerank_mode}
+    if _config.rerank_mode not in {"", "none"} and ordered_ids:
+        candidate_chunks = [_artifacts["chunks"][i] for i in ordered_ids]
+        reranked_chunks, diagnostics = rerank(
+            query=query,
+            chunks=candidate_chunks,
+            mode=_config.rerank_mode,
+            top_n=min(_config.rerank_top_k, len(candidate_chunks)),
+            coverage_mmr_lambda=_config.coverage_mmr_lambda,
+            embed_model_path=_config.embed_model,
+            return_diagnostics=True,
+        )
+        selected_local_indices = diagnostics.get("selected_indices", [])
+        ordered_ids = [ordered_ids[i] for i in selected_local_indices if 0 <= i < len(ordered_ids)]
+        ordered_scores = [ordered_scores[i] for i in selected_local_indices if 0 <= i < len(ordered_scores)]
+        rerank_info["rerank_diagnostics"] = diagnostics
+        rerank_info["reranked_chunk_count"] = len(reranked_chunks)
+
+    return ordered_ids, ordered_scores, rerank_info
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -331,7 +351,7 @@ async def test_chat(request: ChatRequest):
 
     try:
         # ✅ Correct order (matches /api/chat)
-        topk_idxs, ordered_ranked_scores = _retrieve_and_rank(
+        topk_idxs, ordered_ranked_scores, rerank_info = _retrieve_and_rank(
             request.query, top_k=max_chunks
         )
 
@@ -350,6 +370,7 @@ async def test_chat(request: ChatRequest):
             "top_chunks": ranked_chunks[:3],
             "raw_scores": ordered_ranked_scores,
             "top_idxs": topk_idxs,
+            "rerank_info": rerank_info,
             "message": "Retrieval and ranking successful, generation skipped",
         }
 
@@ -377,11 +398,12 @@ async def chat_stream(request: ChatRequest):
     
     chunks = _artifacts["chunks"]
     sources = _artifacts["sources"]
+    rerank_info: Dict = {}
     
     if disable_chunks:
         ranked_chunks, topk_idxs = [], []
     else:
-        topk_idxs, ordered_ranked_scores = _retrieve_and_rank(request.query, top_k=max_chunks)
+        topk_idxs, ordered_ranked_scores, rerank_info = _retrieve_and_rank(request.query, top_k=max_chunks)
         topk_idxs = [int(i) for i in topk_idxs]
         ranked_chunks = [chunks[i] for i in topk_idxs[:max_chunks]]
     
@@ -419,7 +441,7 @@ async def chat_stream(request: ChatRequest):
             
             if _logger:
                 success_log = _create_log(chunks , sources , topk_idxs, ordered_ranked_scores, page_nums, full_response_accumulator, request,
-                            enable_chunks, prompt_type, max_chunks, temperature)
+                            enable_chunks, prompt_type, max_chunks, temperature, additional_log_info=rerank_info)
                 if not success_log:
                     print("Logging failed for this request.")
 
@@ -498,11 +520,12 @@ async def chat(request: ChatRequest):
 
     chunks = _artifacts["chunks"]
     sources = _artifacts["sources"]
+    rerank_info: Dict = {}
 
     try:
         # 2. Retrieval & Ranking (SAFE against mocked None return)
         if disable_chunks:
-            ranked_chunks, topk_idxs, ordered_ranked_scores = [], [], {}
+            ranked_chunks, topk_idxs, ordered_ranked_scores, rerank_info = [], [], {}, {}
         else:
             retrieval_result = _retrieve_and_rank(
                 request.query, top_k=max_chunks
@@ -512,11 +535,11 @@ async def chat(request: ChatRequest):
             if (
                 not retrieval_result
                 or not isinstance(retrieval_result, (list, tuple))
-                or len(retrieval_result) != 2
+                or len(retrieval_result) != 3
             ):
-                topk_idxs, ordered_ranked_scores = [], {}
+                topk_idxs, ordered_ranked_scores, rerank_info = [], {}, {}
             else:
-                topk_idxs, ordered_ranked_scores = retrieval_result
+                topk_idxs, ordered_ranked_scores, rerank_info = retrieval_result
 
             topk_idxs = [int(i) for i in (topk_idxs or [])]
             ordered_ranked_scores = ordered_ranked_scores or {}
@@ -579,6 +602,7 @@ async def chat(request: ChatRequest):
                 prompt_type,
                 max_chunks,
                 temperature,
+                additional_log_info=rerank_info,
             )
             if not success_log:
                 print("Logging failed for this request.")

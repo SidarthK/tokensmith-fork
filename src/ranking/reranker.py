@@ -121,12 +121,8 @@ def rerank_with_cross_encoder(query: str, chunks: List[str], top_n: int) -> List
         return []
 
     scores = get_cross_encoder_scores(query, chunks)
-
-    # Combine chunks with their scores and sort
-    chunk_with_scores = list(zip(chunks, scores))
-    chunk_with_scores.sort(key=lambda x: x[1], reverse=True)
-
-    return [chunk for chunk, _score in chunk_with_scores[:top_n]]
+    ranked_indices = sorted(range(len(chunks)), key=lambda i: float(scores[i]), reverse=True)[:top_n]
+    return [chunks[i] for i in ranked_indices]
 
 
 # -------------------------- Reranking Router -----------------------------
@@ -144,9 +140,11 @@ def rerank(
     Routes to the appropriate reranker based on the mode in the config.
     """
     if mode == "cross_encoder":
-        reranked = rerank_with_cross_encoder(query, chunks, top_n)
+        scores = get_cross_encoder_scores(query, chunks)
+        ranked_indices = sorted(range(len(chunks)), key=lambda i: float(scores[i]), reverse=True)[:top_n]
+        reranked = [chunks[i] for i in ranked_indices]
         if return_diagnostics:
-            return reranked, {"selected_indices": list(range(len(reranked)))}
+            return reranked, {"selected_indices": ranked_indices}
         return reranked
     if mode == "coverage_mmr":
         reranked, diagnostics = rerank_with_coverage_mmr(

@@ -121,6 +121,7 @@ def get_answer(
     
     # Step 1: Get chunks (golden, retrieved, or none)
     chunks_info = None
+    rerank_diagnostics: Dict[str, Any] = {}
     hyde_query = None
     if golden_chunks and cfg.use_golden_chunks:
         # Use provided golden chunks
@@ -157,21 +158,36 @@ def get_answer(
         # print("Example ranked chunk content:", ranked_chunks[0] if ranked_chunks else "No chunks retrieved")
         
         
+        # Step 3: Final re-ranking
+        reranked, rerank_diagnostics = rerank(
+            question,
+            ranked_chunks,
+            mode=cfg.rerank_mode,
+            top_n=cfg.rerank_top_k,
+            coverage_mmr_lambda=cfg.coverage_mmr_lambda,
+            embed_model_path=cfg.embed_model,
+            return_diagnostics=True,
+        )
+        selected_local_indices = rerank_diagnostics.get("selected_indices", [])
+        if selected_local_indices:
+            topk_idxs = [topk_idxs[i] for i in selected_local_indices if 0 <= i < len(topk_idxs)]
+        ranked_chunks = reranked
+
         # Capture chunk info if in test mode
         if is_test_mode:
             # Compute individual ranker ranks
             faiss_scores = raw_scores.get("faiss", {})
             bm25_scores = raw_scores.get("bm25", {})
             index_scores = raw_scores.get("index_keywords", {})
-            
+
             faiss_ranked = sorted(faiss_scores.keys(), key=lambda i: faiss_scores[i], reverse=True)
             bm25_ranked = sorted(bm25_scores.keys(), key=lambda i: bm25_scores[i], reverse=True)
             index_ranked = sorted(index_scores.keys(), key=lambda i: index_scores[i], reverse=True)
-            
+
             faiss_ranks = {idx: rank + 1 for rank, idx in enumerate(faiss_ranked)}
             bm25_ranks = {idx: rank + 1 for rank, idx in enumerate(bm25_ranked)}
             index_ranks = {idx: rank + 1 for rank, idx in enumerate(index_ranked)}
-            
+
             chunks_info = []
             for rank, idx in enumerate(topk_idxs, 1):
                 chunks_info.append({
@@ -185,9 +201,6 @@ def get_answer(
                     "index_score": index_scores.get(idx, 0),
                     "index_rank": index_ranks.get(idx, 0),
                 })
-
-        # Step 3: Final re-ranking
-        ranked_chunks = rerank(question, ranked_chunks, mode=cfg.rerank_mode, top_n=cfg.rerank_top_k)
         # print("Reranked Chunks", type(ranked_chunks), len(ranked_chunks), type(ranked_chunks[0]) if ranked_chunks else "No chunks")
         # print("Example reranked chunk content:", ranked_chunks[0] if ranked_chunks else "No chunks after reranking")
 
@@ -233,6 +246,10 @@ def get_answer(
         # Logging
         meta = artifacts.get("meta", [])
         page_nums = get_page_numbers(topk_idxs, meta)
+        log_details = dict(additional_log_info or {})
+        log_details["rerank_mode"] = cfg.rerank_mode
+        log_details["rerank_diagnostics"] = rerank_diagnostics
+
         logger.save_chat_log(
             query=question,
             config_state=cfg.get_config_state(),
@@ -247,7 +264,7 @@ def get_answer(
             page_map=page_nums,
             full_response=ans,
             top_k=len(topk_idxs),
-            additional_log_info=additional_log_info
+            additional_log_info=log_details
         )
         return ans
 
