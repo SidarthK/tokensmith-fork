@@ -16,7 +16,9 @@
 \begin{document}
 \maketitle
 
-\noindent\textbf{Public Repository Link:} \url{https://github.com/SidarthK/tokensmith-fork}
+\noindent\textbf{Public Repository Link:} \url{https://github.com/SidarthK/tokensmith-fork} \\
+\textbf{Project Branch:} \url{https://github.com/SidarthK/tokensmith-fork/tree/sk/project-dev} \\
+\textbf{Checkpoint Date:} April 14, 2026
 
 \section{Project Overview}
 This project improves TokenSmith's local-first RAG pipeline for database textbook QA by introducing a coverage-aware reranking stage for multi-hop questions. The current pipeline already performs extraction, chunking, hybrid retrieval (FAISS + BM25 + optional textbook-index signal), rank fusion, and LLM answer generation with local \texttt{llama.cpp} models. However, the current reranking strategy prioritizes per-chunk relevance, which can produce redundant evidence for complex questions that require multiple distinct facts.
@@ -41,7 +43,7 @@ The core goal is to implement a reranker that balances relevance with diversity/
     \item \textbf{Benchmarking support:} Added a multi-hop benchmark slice and a comparison runner script for baseline rerank vs coverage-aware rerank.
 \end{itemize}
 
-\textbf{Repository workflow progress:} Work is isolated in branch \texttt{sk/project-dev} with incremental commits matching component milestones.
+\textbf{Repository workflow progress:} Work is isolated in branch \texttt{sk/project-dev} with incremental commits matching component milestones, while \texttt{main} is kept aligned with the upstream TokenSmith baseline.
 
 \section{Challenges and Observations}
 \textbf{Challenge 1: Relevance-only reranking can overfocus on one subtopic.}
@@ -50,8 +52,8 @@ In early behavior, top chunks often repeated similar context instead of covering
 \textbf{Challenge 2: Multi-objective tuning.}
 MMR introduces a relevance-diversity tradeoff. If lambda is too high, retrieval remains redundant; if too low, chunks become diverse but less directly useful. This requires empirical tuning on multi-hop benchmarks.
 
-\textbf{Challenge 3: Local environment/testing friction.}
-During local test execution in this environment, there were dependency issues unrelated to reranking logic (NumPy binary compatibility and optional judge imports). This affects full benchmark automation but not core implementation progress.
+\textbf{Challenge 3: End-to-end benchmark reproducibility.}
+Some local benchmark runs are sensitive to environment dependency versions (for example NumPy compatibility and optional judge imports). This impacts automation stability and requires a controlled environment lock for fair final comparisons.
 
 \textbf{Observation:} The existing TokenSmith architecture is modular enough that reranking upgrades can be inserted with limited disruption to retrieval and generation APIs.
 
