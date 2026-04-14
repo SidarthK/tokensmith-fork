@@ -28,6 +28,8 @@ class RAGConfig:
     )
     rerank_mode: str = ""
     rerank_top_k: int = 5
+    coverage_mmr_lambda: float = 0.7
+    coverage_mmr_similarity_metric: str = "cosine"
 
     # generation
     max_gen_tokens: int = 400
@@ -69,6 +71,12 @@ class RAGConfig:
         assert self.top_k > 0, "top_k must be > 0"
         assert self.num_candidates >= self.top_k, "num_candidates must be >= top_k"
         assert self.ensemble_method.lower() in {"linear","weighted","rrf"}
+        assert self.rerank_top_k > 0, "rerank_top_k must be > 0"
+        assert self.rerank_mode in {"", "none", "cross_encoder", "coverage_mmr"}, \
+            "rerank_mode must be one of: '', none, cross_encoder, coverage_mmr"
+        assert 0.0 <= self.coverage_mmr_lambda <= 1.0, "coverage_mmr_lambda must be in [0, 1]"
+        assert self.coverage_mmr_similarity_metric in {"cosine"}, \
+            "coverage_mmr_similarity_metric currently supports only 'cosine'"
         if self.ensemble_method.lower() in {"linear","weighted"}:
             s = sum(self.ranker_weights.values()) or 1.0
             self.ranker_weights = {k: v/s for k, v in self.ranker_weights.items()}

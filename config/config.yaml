@@ -14,6 +14,8 @@ hyde_max_tokens: 300
 use_indexed_chunks: false
 rerank_mode: "cross_encoder"
 rerank_top_k: 5
+coverage_mmr_lambda: 0.7
+coverage_mmr_similarity_metric: "cosine"
 use_double_prompt: false
 enable_history: true
 max_history_turns: 3
