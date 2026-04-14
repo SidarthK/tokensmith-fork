@@ -1,0 +1,115 @@
+\documentclass[sigconf]{acmart}
+
+\settopmatter{printacmref=false}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\pagestyle{plain}
+
+\title{Checkpoint Report: Coverage-Aware Reranking for Multi-Hop Queries in TokenSmith}
+\author{Sidarth Krishna}
+\affiliation{%
+  \institution{Georgia Institute of Technology}
+  \city{Atlanta}
+  \state{Georgia}
+  \country{USA}}
+\email{sidarthkrishna@gatech.edu}
+
+\begin{document}
+\maketitle
+
+\noindent\textbf{Public Repository Link:} \url{https://github.com/SidarthK/tokensmith-fork}
+
+\section{Project Overview}
+This project improves TokenSmith's local-first RAG pipeline for database textbook QA by introducing a coverage-aware reranking stage for multi-hop questions. The current pipeline already performs extraction, chunking, hybrid retrieval (FAISS + BM25 + optional textbook-index signal), rank fusion, and LLM answer generation with local \texttt{llama.cpp} models. However, the current reranking strategy prioritizes per-chunk relevance, which can produce redundant evidence for complex questions that require multiple distinct facts.
+
+The core goal is to implement a reranker that balances relevance with diversity/coverage. I am implementing an MMR-style greedy reranker where each candidate chunk is scored using query relevance and a redundancy penalty against already selected chunks.
+
+\section{Current Progress}
+\textbf{Implemented and integrated components completed to date:}
+\begin{itemize}
+    \item \textbf{Architecture grounding and implementation plan artifact:} Added a repository-level pipeline map and milestone execution plan documenting extraction $\rightarrow$ indexing $\rightarrow$ retrieval $\rightarrow$ reranking $\rightarrow$ generation.
+    \item \textbf{Config-level support for new reranking mode:} Added \texttt{coverage\_mmr} controls in \texttt{RAGConfig}, including lambda and validation logic.
+    \item \textbf{Coverage-aware reranker core:} Implemented MMR-style reranking with:
+    \begin{itemize}
+        \item relevance from cross-encoder query--chunk scores,
+        \item redundancy penalty from chunk--chunk similarity,
+        \item fallback lexical similarity if embedding similarity fails,
+        \item deterministic greedy selection of top chunks.
+    \end{itemize}
+    \item \textbf{Pipeline integration:} Integrated reranking behavior into both CLI and FastAPI answer paths without changing frontend response schema.
+    \item \textbf{Structured diagnostics logging:} Added rerank diagnostics (selected indices, mode, score details) into stored chat logs for analysis.
+    \item \textbf{Test coverage additions:} Added unit tests for MMR behavior (diversity preference, determinism, edge cases) and an integration test for \texttt{get\_answer()} rerank-index mapping behavior.
+    \item \textbf{Benchmarking support:} Added a multi-hop benchmark slice and a comparison runner script for baseline rerank vs coverage-aware rerank.
+\end{itemize}
+
+\textbf{Repository workflow progress:} Work is isolated in branch \texttt{sk/project-dev} with incremental commits matching component milestones.
+
+\section{Challenges and Observations}
+\textbf{Challenge 1: Relevance-only reranking can overfocus on one subtopic.}
+In early behavior, top chunks often repeated similar context instead of covering separate sub-questions. This confirms the proposal motivation for explicit diversity pressure.
+
+\textbf{Challenge 2: Multi-objective tuning.}
+MMR introduces a relevance-diversity tradeoff. If lambda is too high, retrieval remains redundant; if too low, chunks become diverse but less directly useful. This requires empirical tuning on multi-hop benchmarks.
+
+\textbf{Challenge 3: Local environment/testing friction.}
+During local test execution in this environment, there were dependency issues unrelated to reranking logic (NumPy binary compatibility and optional judge imports). This affects full benchmark automation but not core implementation progress.
+
+\textbf{Observation:} The existing TokenSmith architecture is modular enough that reranking upgrades can be inserted with limited disruption to retrieval and generation APIs.
+
+\section{Background and Related Work}
+The work is grounded in RAG literature and classical IR diversification ideas. In practice, TokenSmith already applies rank fusion and cross-encoder reranking; this project extends that final stage toward set-aware selection inspired by Maximal Marginal Relevance (MMR), where ranking decisions are conditioned on previously selected evidence to reduce redundancy and improve coverage for multi-hop prompts.
+
+\section{Evaluation Sketch and Next Steps}
+\textbf{Near-term next steps (before final submission):}
+\begin{itemize}
+    \item Run side-by-side experiments on baseline reranking and \texttt{coverage\_mmr} using the same benchmark slice.
+    \item Report retrieval-side metrics (chunk overlap/redundancy, ideal-chunk hit behavior) and answer-side metrics (semantic/keyword/NLI metrics already present in TokenSmith tests).
+    \item Measure latency overhead from coverage reranking.
+    \item Tune lambda and rerank depth for best quality-latency tradeoff.
+\end{itemize}
+
+\textbf{Timeline to completion:}
+\begin{itemize}
+    \item Week 1: complete benchmark runs + hyperparameter sweep.
+    \item Week 2: analyze error cases and refine reranker scoring.
+    \item Week 3: finalize evaluation write-up and ablation section.
+\end{itemize}
+
+\section*{Appendix: Learning Episode (Baseline TokenSmith)}
+\textit{Setup note:} This appendix is based on baseline TokenSmith behavior and textbook-grounded chunk verification.
+
+\textbf{Question 1: What are the three passes in ARIES crash recovery?}
+
+\textbf{Correct textbook chunk(s):}
+\begin{quote}
+``ARIES recovers from a system crash in three passes. Analysis pass... Redo pass... Undo pass...'' (Chunk 1247)
+\end{quote}
+
+\textbf{Question 2: How does ARIES determine where REDO starts?}
+
+\textbf{Correct textbook chunk(s):}
+\begin{quote}
+``The analysis pass ... sets RedoLSN to the minimum of the RecLSNs of the pages in the DirtyPageTable.'' (Chunk 1248)
+\end{quote}
+
+\textbf{Question 3: What does the REDO pass do?}
+
+\textbf{Correct textbook chunk(s):}
+\begin{quote}
+``The redo pass repeats history by replaying every action that is not already reflected in the page on disk. The redo pass scans the log forward from RedoLSN.'' (Chunk 1249)
+\end{quote}
+
+\textbf{Question 4: What happens during the UNDO pass?}
+
+\textbf{Correct textbook chunk(s):}
+\begin{quote}
+``The undo pass ... performs a single backward scan of the log, undoing all transactions in undo-list.'' (Chunk 1250)
+\end{quote}
+
+\textbf{Question 5: Why is this flow useful for atomicity?}
+
+\textbf{Correct textbook chunk(s):}
+\begin{quote}
+Combined evidence from Chunks 1247--1250: analysis identifies incomplete transactions, redo repeats needed history safely, and undo rolls back uncommitted work to preserve all-or-nothing effects.
+\end{quote}
+
+\end{document}
