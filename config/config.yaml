@@ -1,4 +1,5 @@
 embed_model: "models/Qwen3-Embedding-4B-Q5_K_M.gguf"
+embedding_model_context_window: 4096
 top_k: 10
 num_candidates: 50
 ensemble_method: "rrf"
@@ -19,4 +20,4 @@ coverage_mmr_similarity_metric: "cosine"
 use_double_prompt: false
 enable_history: true
 max_history_turns: 3
-enable_topic_extraction: true
+enable_topic_extraction: false
