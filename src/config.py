@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import inspect
 from dataclasses import dataclass, field
 from typing import Dict
 
@@ -14,7 +15,7 @@ class RAGConfig:
     # chunking
     chunk_config: ChunkConfig = field(init=False)
     chunk_mode: str = "recursive_sections"
-    chunk_size_in_chars: int = 2000
+    chunk_size: int = 2000
     chunk_overlap: int = 300
 
     # retrieval + ranking
@@ -65,6 +66,18 @@ class RAGConfig:
     def from_yaml(cls, path: os.PathLike) -> RAGConfig:
         with open(path, 'r') as f:
             data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            data = {}
+
+        # Backward-compatible aliases for older config files.
+        if "chunk_size_in_chars" in data and "chunk_size" not in data:
+            data["chunk_size"] = data.pop("chunk_size_in_chars")
+        if "model_path" in data and "gen_model" not in data:
+            data["gen_model"] = data.pop("model_path")
+
+        # Ignore unknown keys instead of crashing on constructor mismatch.
+        valid_fields = set(inspect.signature(cls).parameters.keys())
+        data = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**data)
 
     def __post_init__(self):
@@ -90,7 +103,7 @@ class RAGConfig:
         """Parse chunk configuration from YAML."""
         if self.chunk_mode == "recursive_sections":
             return SectionRecursiveConfig(
-                recursive_chunk_size=self.chunk_size_in_chars,
+                recursive_chunk_size=self.chunk_size,
                 recursive_overlap=self.chunk_overlap,
             )
         else:
