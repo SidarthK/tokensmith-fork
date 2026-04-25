@@ -61,7 +61,16 @@ def get_system_prompt(mode="tutor"):
     return prompts.get(mode)
 
 
-def format_prompt(chunks, query, max_chunk_chars=400, system_prompt_mode="tutor"):
+def _truncate_chunk(chunk: str, max_chunk_chars: int) -> str:
+    if len(chunk) <= max_chunk_chars:
+        return chunk
+    truncated = chunk[:max_chunk_chars].rsplit(" ", 1)[0].strip()
+    if not truncated:
+        truncated = chunk[:max_chunk_chars].strip()
+    return truncated + " ..."
+
+
+def format_prompt(chunks, query, max_chunk_chars=500, system_prompt_mode="tutor"):
     """
     Format prompt for LLM with chunks and query.
     
@@ -79,7 +88,8 @@ def format_prompt(chunks, query, max_chunk_chars=400, system_prompt_mode="tutor"
     if chunks and len(chunks) > 0:
         if isinstance(chunks[0], tuple):
             chunks = [c[0] for c in chunks]
-        context = "\n\n".join(chunks)
+        clipped_chunks = [_truncate_chunk(chunk, max_chunk_chars) for chunk in chunks]
+        context = "\n\n".join(clipped_chunks)
         context = text_cleaning(context)
         
         # Build prompt with chunks

@@ -204,7 +204,7 @@ def get_answer(
         if cfg.use_hyde:
             retrieval_query = generate_hypothetical_document(question, cfg.gen_model, max_tokens=cfg.hyde_max_tokens)
 
-        pool_n = max(cfg.num_candidates, cfg.top_k + 10)
+        pool_n = max(cfg.num_candidates, cfg.get_rerank_candidate_pool_size(), cfg.top_k + 10)
         raw_scores: Dict[str, Dict[int, float]] = {}
         for retriever in retrievers:
             # print(f"Getting scores from retriever: {retriever.name}...")
@@ -218,7 +218,8 @@ def get_answer(
         ordered, scores = ranker.rank(raw_scores=raw_scores)
         # print(f"Ordered candidate indices after ranking: {ordered[:cfg.top_k]}")
         # print(f"Corresponding scores: {scores[:cfg.top_k]}")
-        topk_idxs = filter_retrieved_chunks(cfg, chunks, ordered)
+        candidate_pool_size = min(len(ordered), cfg.get_rerank_candidate_pool_size())
+        topk_idxs = filter_retrieved_chunks(cfg, chunks, ordered, limit=candidate_pool_size)
         ranked_chunks = [chunks[i] for i in topk_idxs]
         # print(f"Top-{cfg.top_k} chunk indices after filtering: {topk_idxs}")
         # print("Len Ranked chunks:", len(ranked_chunks))
@@ -256,11 +257,13 @@ def get_answer(
             index_ranks = {idx: rank + 1 for rank, idx in enumerate(index_ranked)}
 
             chunks_info = []
+            meta = artifacts.get("meta", [])
             for rank, idx in enumerate(topk_idxs, 1):
                 chunks_info.append({
                     "rank": rank,
                     "chunk_id": idx,
                     "content": chunks[idx],
+                    "page_numbers": meta[idx].get("page_numbers", []) if 0 <= idx < len(meta) else [],
                     "faiss_score": faiss_scores.get(idx, 0),
                     "faiss_rank": faiss_ranks.get(idx, 0),
                     "bm25_score": bm25_scores.get(idx, 0),

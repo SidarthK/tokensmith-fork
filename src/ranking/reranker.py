@@ -35,6 +35,15 @@ def get_cross_encoder_scores(query: str, chunks: List[str]) -> np.ndarray:
     pairs = [(query, chunk) for chunk in chunks]
     return np.array(model.predict(pairs, show_progress_bar=False), dtype=np.float32)
 
+def _normalize_scores(scores: np.ndarray) -> np.ndarray:
+    if scores.size == 0:
+        return scores
+    min_score = float(np.min(scores))
+    max_score = float(np.max(scores))
+    if np.isclose(max_score, min_score):
+        return np.ones_like(scores, dtype=np.float32)
+    return ((scores - min_score) / (max_score - min_score)).astype(np.float32)
+
 def _token_jaccard_similarity_matrix(chunks: List[str]) -> np.ndarray:
     n = len(chunks)
     matrix = np.zeros((n, n), dtype=np.float32)
@@ -77,7 +86,8 @@ def rerank_with_coverage_mmr(
         return [], {"selected_indices": [], "relevance_scores": [], "mmr_scores": []}
 
     top_n = min(top_n, len(chunks))
-    relevance_scores = get_cross_encoder_scores(query, chunks)
+    raw_relevance_scores = get_cross_encoder_scores(query, chunks)
+    relevance_scores = _normalize_scores(raw_relevance_scores)
     similarity_matrix = get_similarity_matrix(chunks, embed_model_path)
 
     selected: List[int] = []
@@ -105,6 +115,7 @@ def rerank_with_coverage_mmr(
 
     diagnostics = {
         "selected_indices": selected,
+        "raw_relevance_scores": [float(s) for s in raw_relevance_scores.tolist()],
         "relevance_scores": [float(s) for s in relevance_scores.tolist()],
         "mmr_scores": [mmr_scores[idx] for idx in selected],
         "lambda_param": lambda_param,
@@ -160,5 +171,6 @@ def rerank(
 
     # We can add other re-ranking strategies to switch between them.
     if return_diagnostics:
-        return chunks, {"selected_indices": list(range(min(top_n, len(chunks))))}
-    return chunks
+        selected = list(range(min(top_n, len(chunks))))
+        return [chunks[i] for i in selected], {"selected_indices": selected}
+    return chunks[:top_n]

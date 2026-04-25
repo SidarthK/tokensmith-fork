@@ -95,12 +95,29 @@ def pytest_addoption(parser):
         default=None,
         help="Reranking mode override for benchmark experiments"
     )
+    group.addoption(
+        "--coverage-mmr-lambda",
+        type=float,
+        default=None,
+        help="Override coverage-aware MMR lambda"
+    )
+    group.addoption(
+        "--coverage-mmr-candidate-pool",
+        type=int,
+        default=None,
+        help="Override coverage-aware MMR candidate pool size"
+    )
     
     # === Testing Options ===
     group.addoption(
         "--artifacts_dir",
         default=None,
         help="Artifacts folder for tests (overrides config)"
+    )
+    group.addoption(
+        "--results-dir",
+        default=None,
+        help="Directory to store benchmark outputs for this run"
     )
     group.addoption(
         "--index-prefix",
@@ -157,22 +174,25 @@ def config(pytestconfig):
     merged_config = {
         # Retrieval        
         "top_k": cfg.get("top_k", 10),
-        "pool_size": cfg.get("pool_size", 60),
+        "num_candidates": cfg.get("num_candidates", cfg.get("pool_size", 60)),
         "ensemble_method": cfg.get("ensemble_method", "rrf"),
         "rrf_k": cfg.get("rrf_k", 60),
         "ranker_weights": cfg.get("ranker_weights", {"faiss":0.6,"bm25":0.4}),
         "rerank_mode": pytestconfig.getoption("--rerank-mode") or cfg.get("rerank_mode", "none"),
         "rerank_top_k": cfg.get("rerank_top_k", 5),
+        "rerank_candidate_pool": cfg.get("rerank_candidate_pool", 20),
+        "coverage_mmr_candidate_pool": pytestconfig.getoption("--coverage-mmr-candidate-pool") or cfg.get("coverage_mmr_candidate_pool", 40),
+        "coverage_mmr_lambda": pytestconfig.getoption("--coverage-mmr-lambda") or cfg.get("coverage_mmr_lambda", 0.7),
         "seg_filter": cfg.get("seg_filter", None),
-        "chunk_mode": cfg.get("chunk_mode", "sections"),
-        "recursive_chunk_size": cfg.get("recursive_chunk_size", 1000),
-        "recursive_overlap": cfg.get("recursive_overlap", 0),
+        "chunk_mode": cfg.get("chunk_mode", "recursive_sections"),
+        "chunk_size_in_chars": cfg.get("chunk_size_in_chars", cfg.get("recursive_chunk_size", 2000)),
+        "chunk_overlap": cfg.get("chunk_overlap", cfg.get("recursive_overlap", 200)),
 
         # Output
         "output_mode": pytestconfig.getoption("--output-mode") or cfg.get("output_mode", "terminal"),
         
         # Models
-        "model_path": pytestconfig.getoption("--model-path") or cfg.get("model_path", "models/generators/qwen2.5-3b-instruct-q8_0.gguf"),
+        "model_path": pytestconfig.getoption("--model-path") or cfg.get("model_path", cfg.get("gen_model", "models/generators/qwen2.5-3b-instruct-q8_0.gguf")),
         "embed_model": pytestconfig.getoption("--embed-model") or cfg.get("embed_model", os.path.join(Path(__file__).parent.parent, "models", "embedders", "Qwen3-Embedding-4B-Q8_0.gguf")),
         
         # Generator
@@ -182,7 +202,7 @@ def config(pytestconfig):
         # Testing
         "artifacts_dir": pytestconfig.getoption("--artifacts_dir") or "index/tokens-200",
         "index_prefix": pytestconfig.getoption("--index-prefix") or cfg.get("index_prefix", "textbook_index"),
-        "metrics": pytestconfig.getoption("--metrics") or cfg.get("metrics", ["all"]),
+        "metrics": pytestconfig.getoption("metrics_list") or cfg.get("metrics", ["all"]),
         "threshold_override": pytestconfig.getoption("--threshold") or cfg.get("threshold_override", None),
         
         # Query Enhancement (HyDE)
@@ -238,10 +258,11 @@ def benchmarks(pytestconfig, config):
 
 
 @pytest.fixture(scope="session")
-def results_dir():
+def results_dir(pytestconfig):
     """Create and return the results directory."""
-    results_path = Path(__file__).parent / "results"
-    results_path.mkdir(exist_ok=True)
+    results_dir_override = pytestconfig.getoption("--results-dir")
+    results_path = Path(results_dir_override) if results_dir_override else Path(__file__).parent / "results"
+    results_path.mkdir(parents=True, exist_ok=True)
     return results_path
 
 

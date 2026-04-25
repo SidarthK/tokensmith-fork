@@ -174,7 +174,7 @@ def _create_log(chunks , sources , topk_idxs, ordered_ranked_scores, page_nums, 
 def _retrieve_and_rank(query: str, top_k: Optional[int] = None):
     chunks = _artifacts["chunks"]
     effective_top_k = top_k if top_k is not None else _config.top_k
-    pool_n = max(_config.num_candidates, effective_top_k + 10)
+    pool_n = max(_config.num_candidates, _config.get_rerank_candidate_pool_size(effective_top_k), effective_top_k + 10)
     raw_scores: Dict[str, Dict[int, float]] = {}
 
     for retriever in _retrievers:
@@ -182,15 +182,12 @@ def _retrieve_and_rank(query: str, top_k: Optional[int] = None):
 
     ordered_ids, ordered_scores = _ranker.rank(raw_scores=raw_scores)
 
-    if top_k is not None:
-        ordered_ids = ordered_ids[:top_k]
-        ordered_scores = ordered_scores[:top_k]
-    else:
-        ordered_ids = ordered_ids[:_config.top_k]
-        ordered_scores = ordered_scores[:_config.top_k]
+    candidate_pool_size = min(len(ordered_ids), _config.get_rerank_candidate_pool_size(effective_top_k))
+    ordered_ids = ordered_ids[:candidate_pool_size]
+    ordered_scores = ordered_scores[:candidate_pool_size]
 
     rerank_info = {"rerank_mode": _config.rerank_mode}
-    if _config.rerank_mode not in {"", "none"} and ordered_ids:
+    if ordered_ids:
         candidate_chunks = [_artifacts["chunks"][i] for i in ordered_ids]
         reranked_chunks, diagnostics = rerank(
             query=query,
@@ -206,6 +203,9 @@ def _retrieve_and_rank(query: str, top_k: Optional[int] = None):
         ordered_scores = [ordered_scores[i] for i in selected_local_indices if 0 <= i < len(ordered_scores)]
         rerank_info["rerank_diagnostics"] = diagnostics
         rerank_info["reranked_chunk_count"] = len(reranked_chunks)
+
+    ordered_ids = ordered_ids[:effective_top_k]
+    ordered_scores = ordered_scores[:effective_top_k]
 
     return ordered_ids, ordered_scores, rerank_info
 

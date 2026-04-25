@@ -1,0 +1,128 @@
+benchmarks:
+  - id: "singlehop_fd_meaning"
+    question: "What does a functional dependency X -> Y assert about tuples in a relation?"
+    expected_answer: "A functional dependency X -> Y means that whenever two tuples agree on X, they must also agree on Y, so X determines the value of Y."
+    keywords: ["functional dependency", "agree on X", "agree on Y", "determines"]
+    similarity_threshold: 0.72
+    ideal_retrieved_chunks: [378, 379, 380]
+    ideal_retrieved_pages: [481, 482, 483, 484, 485]
+
+  - id: "singlehop_bplus_lookup_efficiency"
+    question: "Why do B+ trees keep point lookups efficient on disk?"
+    expected_answer: "B+ trees have high fan-out and are balanced, so the tree stays shallow and a lookup touches only a few disk blocks; the root is often cached, reducing I/O further."
+    keywords: ["B+ tree", "fan-out", "balanced", "shallow", "disk blocks"]
+    similarity_threshold: 0.72
+    ideal_retrieved_chunks: [821, 822, 826, 827]
+    ideal_retrieved_pages: [974, 975, 976, 981, 983]
+
+  - id: "singlehop_wal_rule"
+    question: "What does the write-ahead logging rule require before a modified database page is written?"
+    expected_answer: "Write-ahead logging requires the relevant log records, especially the undo information, to be forced to stable storage before the modified page itself is written to disk."
+    keywords: ["write-ahead logging", "stable storage", "log records", "before page write", "undo information"]
+    similarity_threshold: 0.73
+    ideal_retrieved_chunks: [1216, 1217, 1219, 1220]
+    ideal_retrieved_pages: [1431, 1432, 1433, 1434, 1435, 1436]
+
+  - id: "multihop_fd_lossless_condition"
+    question: "How do functional dependencies tell you whether a decomposition is lossless?"
+    expected_answer: "A decomposition of R into R1 and R2 is lossless if the common attributes R1 ∩ R2 functionally determine R1 or R2; equivalently, the intersection is a superkey for one of the decomposed relations."
+    keywords: ["lossless decomposition", "functional dependencies", "intersection", "superkey", "R1 ∩ R2"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: [374, 382, 383]
+    ideal_retrieved_pages: [477, 478, 479, 485, 486, 487]
+
+  - id: "multihop_3nf_dependency_preservation"
+    question: "Why can the 3NF synthesis algorithm preserve dependencies yet still rely on a key-based argument to guarantee losslessness?"
+    expected_answer: "The 3NF synthesis algorithm preserves dependencies by building schemas from a canonical cover, but it guarantees losslessness by ensuring that at least one resulting schema contains a candidate key for the original relation."
+    keywords: ["3NF", "dependency preservation", "canonical cover", "candidate key", "lossless"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: [382, 418, 420, 421]
+    ideal_retrieved_pages: [485, 486, 516, 517, 518, 519, 520]
+
+  - id: "multihop_bplus_sort_join_tradeoff"
+    question: "How do B+ tree indexing and sorted inputs help disk-based join processing, and where do write costs still show up?"
+    expected_answer: "B+ trees keep lookups and range access efficient with shallow balanced trees, while sorted inputs make merge join scan relations with few block reads. The tradeoff is that maintaining a B+ tree on updates can require splits, coalescing, and extra writes."
+    keywords: ["B+ tree", "sorted inputs", "merge join", "disk-based", "updates", "splits"]
+    similarity_threshold: 0.74
+    ideal_retrieved_chunks: [826, 827, 829, 922, 925]
+    ideal_retrieved_pages: [981, 983, 984, 1090, 1091, 1093, 1094]
+
+  - id: "multihop_serializable_vs_read_committed"
+    question: "Why is serializable stronger than read committed, and what locking tradeoff comes with enforcing it?"
+    expected_answer: "Serializable requires behavior equivalent to some serial order, preventing anomalies that read committed still allows. Enforcing serializable behavior with locking requires transactions to hold locks long enough to preserve serializability, which reduces concurrency."
+    keywords: ["serializable", "read committed", "serial order", "anomalies", "locking", "concurrency"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: [1074, 1075, 1079, 1080, 1094]
+    ideal_retrieved_pages: [1263, 1264, 1267, 1269, 1295, 1296]
+
+  - id: "multihop_snapshot_read_heavy_tradeoff"
+    question: "Why is snapshot isolation attractive for long read-heavy queries, and why can it still fail to guarantee serializability?"
+    expected_answer: "Snapshot isolation lets transactions read from a private committed snapshot, so long read-heavy queries do not block updates. But it is still weaker than serializable execution because concurrent transactions can observe stale snapshots and produce anomalies unless extra checks are applied."
+    keywords: ["snapshot isolation", "read-heavy", "private snapshot", "serializability", "anomalies"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: [1082, 1143, 1148, 1154]
+    ideal_retrieved_pages: [1270, 1271, 1345, 1346, 1349, 1350, 1355, 1356]
+
+  - id: "multihop_wal_atomicity_durability"
+    question: "How do WAL and redo/undo together support atomicity and durability after failures?"
+    expected_answer: "WAL ensures log records reach stable storage before data pages, giving recovery enough information to redo committed updates and undo incomplete ones. Redo preserves durability for committed transactions, while undo preserves atomicity by removing partial effects."
+    keywords: ["WAL", "redo", "undo", "atomicity", "durability", "stable storage"]
+    similarity_threshold: 0.76
+    ideal_retrieved_chunks: [1045, 1046, 1201, 1202, 1217]
+    ideal_retrieved_pages: [1230, 1231, 1232, 1418, 1419, 1433]
+
+  - id: "multihop_aries_recovery_pipeline"
+    question: "How does ARIES move from analysis to redo to undo after a crash?"
+    expected_answer: "ARIES first performs analysis to identify dirty pages, loser transactions, and RedoLSN. It then redoes history forward from RedoLSN and finally scans backward to undo incomplete transactions, using CLRs and transaction log links to continue rollback correctly."
+    keywords: ["ARIES", "analysis", "RedoLSN", "redo", "undo", "CLR"]
+    similarity_threshold: 0.76
+    ideal_retrieved_chunks: [1242, 1247, 1248, 1249, 1250]
+    ideal_retrieved_pages: [1457, 1458, 1461, 1462, 1463]
+
+  - id: "multihop_oltp_vs_warehouse"
+    question: "Contrast OLTP-style transaction processing with data warehousing and analytics in workload shape, latency goals, and schema design."
+    expected_answer: "OLTP focuses on many short, concurrent, update-heavy transactions with tight response-time goals, while analytics and data warehousing focus on fewer but much larger read-heavy queries. Warehouses gather data under schemas optimized for analysis, often with fact and dimension tables and some redundancy to support OLAP."
+    keywords: ["OLTP", "data warehouse", "analytics", "fact tables", "dimension tables", "latency", "concurrency"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: [661, 669, 671, 1661, 1664]
+    ideal_retrieved_pages: [782, 801, 802, 803, 1921, 1922, 1924, 1925]
+
+  - id: "multihop_recoverable_to_strict_2pl"
+    question: "How does strict two-phase locking improve on merely recoverable schedules when cascading failures are possible?"
+    expected_answer: "Recoverable schedules only ensure a writer commits before dependent readers commit, but cascading rollback can still occur if uncommitted data are read. Strict two-phase locking keeps exclusive locks until commit, preventing reads of uncommitted writes and thereby avoiding cascading rollbacks."
+    keywords: ["recoverable", "strict two-phase locking", "cascading rollback", "exclusive locks", "uncommitted writes"]
+    similarity_threshold: 0.76
+    ideal_retrieved_chunks: [1072, 1073, 1095, 1097]
+    ideal_retrieved_pages: [1261, 1262, 1296, 1297, 1299]
+
+  - id: "multihop_aries_redo_vs_undo_paths"
+    question: "How does ARIES decide where redo begins, and why does undo follow a different path through the log?"
+    expected_answer: "During analysis ARIES sets RedoLSN to the minimum RecLSN in the DirtyPageTable, so redo can scan forward from the earliest page that may need repeating. Undo follows transaction-specific backward chains using PrevLSN and UndoNextLSN because it only rolls back loser transactions rather than replaying all history."
+    keywords: ["RedoLSN", "DirtyPageTable", "PrevLSN", "UndoNextLSN", "redo", "undo"]
+    similarity_threshold: 0.77
+    ideal_retrieved_chunks: [1246, 1248, 1249, 1250]
+    ideal_retrieved_pages: [1460, 1461, 1462, 1463]
+
+  - id: "multihop_fuzzy_checkpointing_in_aries"
+    question: "Why does ARIES use fuzzy checkpointing, and how does the analysis pass compensate for incomplete checkpoints?"
+    expected_answer: "ARIES uses fuzzy checkpointing to avoid pausing updates while a checkpoint flushes pages to disk. Because pages may still be dirty when a crash happens, the analysis pass reads the last completed checkpoint, rebuilds the DirtyPageTable and undo-list, and computes RedoLSN so recovery can safely continue."
+    keywords: ["fuzzy checkpointing", "DirtyPageTable", "analysis pass", "RedoLSN", "last completed checkpoint"]
+    similarity_threshold: 0.77
+    ideal_retrieved_chunks: [1205, 1223, 1243, 1248]
+    ideal_retrieved_pages: [1422, 1423, 1424, 1438, 1439, 1458, 1462, 1463]
+
+  - id: "multihop_snapshot_vs_strict_2pl_reads"
+    question: "Why can snapshot isolation support long read transactions better than strict two-phase locking, and what correctness risk remains?"
+    expected_answer: "Snapshot isolation lets readers use a private committed snapshot, so long reads do not block writers the way strict two-phase locking can. The tradeoff is that snapshot isolation can still allow nonserializable executions and must validate constraints or updates against the current database state at commit time."
+    keywords: ["snapshot isolation", "strict two-phase locking", "long reads", "nonserializable", "validation"]
+    similarity_threshold: 0.77
+    ideal_retrieved_chunks: [1082, 1097, 1148, 1154]
+    ideal_retrieved_pages: [1270, 1271, 1299, 1349, 1350, 1355, 1356]
+
+  - id: "multihop_warehouse_schema_and_olap_sql"
+    question: "How do fact/dimension warehouse schemas support OLAP, and why does OLAP SQL need more than basic GROUP BY?"
+    expected_answer: "Warehouse schemas organize analysis around large fact tables and dimension tables so aggregates can be sliced by multiple dimensions. OLAP queries often need many related groupings across subsets of dimensions, which basic GROUP BY cannot express in one query, so OLAP SQL adds specialized constructs and optimizations for interactive multidimensional analysis."
+    keywords: ["fact tables", "dimension tables", "OLAP", "GROUP BY", "multiple groupings", "interactive"]
+    similarity_threshold: 0.77
+    ideal_retrieved_chunks: [669, 678, 683, 684, 685]
+    ideal_retrieved_pages: [801, 809, 810, 811, 815, 816, 817, 818]

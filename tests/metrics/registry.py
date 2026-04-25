@@ -1,4 +1,5 @@
 from typing import Dict, List, Optional
+import os
 from tests.metrics.base import MetricBase
 
 
@@ -22,8 +23,9 @@ class MetricRegistry:
         self.register(SemanticSimilarityMetric())
         self.register(KeywordMatchMetric())
         self.register(NLIEntailmentMetric())
-        self.register(AsyncLLMJudgeMetric())
         self.register(ChunkRetrievalMetric())
+        if os.environ.get("ENABLE_GEMINI_JUDGE", "").lower() in {"1", "true", "yes"}:
+            self.register(AsyncLLMJudgeMetric())
 
     def register(self, metric: MetricBase):
         """Register a new metric."""

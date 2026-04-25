@@ -4,114 +4,114 @@
 \renewcommand\footnotetextcopyrightpermission[1]{}
 \pagestyle{plain}
 
-\title{Checkpoint Report: Coverage-Aware Reranking for Multi-Hop Queries in TokenSmith}
+\title{Project Report: Coverage-Aware Reranking for Multi-Hop Queries in TokenSmith}
 \author{Sidarth Krishna}
 \affiliation{%
   \institution{Georgia Institute of Technology}
   \city{Atlanta}
   \state{Georgia}
   \country{USA}}
-\email{sidarthkrishna@gatech.edu}
+\email{skrishna70@gatech.edu}
 
 \begin{document}
 \maketitle
 
-\noindent\textbf{Public Repository Link:} \url{https://github.com/SidarthK/tokensmith-fork} \\
-\textbf{Project Branch:} \url{https://github.com/SidarthK/tokensmith-fork/tree/sk/project-dev} \\
-\textbf{Checkpoint Date:} April 14, 2026
+\noindent\textbf{Public Forked Repository Link:} \url{https://github.com/SidarthK/tokensmith-fork} \\
+\textbf{Main Project Branch:} \url{https://github.com/SidarthK/tokensmith-fork/tree/sk/project-dev}
 
 \section{Project Overview}
-This project improves TokenSmith's local-first RAG pipeline for database textbook QA by introducing a coverage-aware reranking stage for multi-hop questions. The current pipeline already performs extraction, chunking, hybrid retrieval (FAISS + BM25 + optional textbook-index signal), rank fusion, and LLM answer generation with local \texttt{llama.cpp} models. However, the current reranking strategy prioritizes per-chunk relevance, which can produce redundant evidence for complex questions that require multiple distinct facts.
+The goal of this project is to improve TokenSmith’s retrieval pipeline for multi-hop textbook question answering by implementing an improved coverage-aware reranker. In the current TokenSmith pipeline, candidate chunks are first retrieved using multiple signals, including FAISS semantic retrieval, BM25 lexical retrieval, and an optional textbook-index keyword matching, and then combined through some weighted rank fusion. After that, an optional reranker applies a cross-encoder to rescore the retrieved chunks before they are sent to the local LLM for answer generation via RAG.
 
-The core goal is to implement a reranker that balances relevance with diversity/coverage. I am implementing an MMR-style greedy reranker where each candidate chunk is scored using query relevance and a redundancy penalty against already selected chunks.
+The core problem is that the current reranker evaluates each chunk independently with respect to the query. This works decently well for narrow fact based questions, but it becomes limiting for multi-hop questions where the answer depends on combining information from multiple different textbook locations or sections. Because each chunk is scored in isolation, the final top-ranked set can be redundant, overlapping, or hyper focused on only one part of the question. As a result, TokenSmith may fail to retrieve complementary evidence needed to fully answer more complex questions.
 
-\section{Current Progress}
-\textbf{Implemented and integrated components completed to date:}
-\begin{itemize}
-    \item \textbf{Architecture grounding and implementation plan artifact:} Added a repository-level pipeline map and milestone execution plan documenting extraction $\rightarrow$ indexing $\rightarrow$ retrieval $\rightarrow$ reranking $\rightarrow$ generation.
-    \item \textbf{Config-level support for new reranking mode:} Added \texttt{coverage\_mmr} controls in \texttt{RAGConfig}, including lambda and validation logic.
-    \item \textbf{Coverage-aware reranker core:} Implemented MMR-style reranking with:
-    \begin{itemize}
-        \item relevance from cross-encoder query--chunk scores,
-        \item redundancy penalty from chunk--chunk similarity,
-        \item fallback lexical similarity if embedding similarity fails,
-        \item deterministic greedy selection of top chunks.
-    \end{itemize}
-    \item \textbf{Pipeline integration:} Integrated reranking behavior into both CLI and FastAPI answer paths without changing frontend response schema.
-    \item \textbf{Structured diagnostics logging:} Added rerank diagnostics (selected indices, mode, score details) into stored chat logs for analysis.
-    \item \textbf{Test coverage additions:} Added unit tests for MMR behavior (diversity preference, determinism, edge cases) and an integration test for \texttt{get\_answer()} rerank-index mapping behavior.
-    \item \textbf{Benchmarking support:} Added a multi-hop benchmark slice and a comparison runner script for baseline rerank vs coverage-aware rerank.
-\end{itemize}
+This project addresses that limitation by introducing a reranking strategy that explicitly balances relevance and coverage. The main idea is to keep the strong query relevance signal from the cross-encoder, while also discouraging selection of chunks that are too similar to chunks that have already been chosen. This makes the reranker more set-aware, rather than treating chunk selection as a sequence of unrelated independent relevance decisions. The intended outcome is a final chunk set that is more diverse, less redundant, and better suited for answering multi-hop queries.
 
-\textbf{Repository workflow progress:} Work is isolated in branch \texttt{sk/project-dev} with incremental commits matching component milestones, while \texttt{main} is kept aligned with the upstream TokenSmith baseline.
+The work conducted during this final report corresponds directly to my original proposal and completes the main 100\% goal. My proposal focused on building an improved reranker that selects chunks that are not just individually relevant, but also complementary. The current implementation direction follows that plan by using a Maximal Marginal Relevance (MMR)-style greedy reranking strategy to trade off query relevance against redundancy among selected chunks. The main testable question for this final report is whether coverage-aware reranking improves TokenSmith on harder multi-hop textbook queries relative to the existing baselines of hybrid retrieval without reranking and the current cross-encoder reranker.
 
-\section{Challenges and Observations}
-\textbf{Challenge 1: Relevance-only reranking can overfocus on one subtopic.}
-In early behavior, top chunks often repeated similar context instead of covering separate sub-questions. This confirms the proposal motivation for explicit diversity pressure.
+\section{Implementation Progress and Current Status}
+So far, I have completed the implementation work needed to move from the original proposal into a coverage-aware reranking pipeline. The first step was grounding the design in the existing TokenSmith architecture and identifying the exact point in the pipeline where a coverage-aware reranker could be introduced easily. From the repository, I traced the full system flow from extraction and indexing through retrieval, score fusion, reranking, and generation. In the current pipeline, TokenSmith converts textbook PDFs into markdown, extracts structured sections, recursively chunks them, builds FAISS and BM25 retrieval artifacts, retrieves a candidate pool, fuses the retrieval scores, reranks the resulting chunks, and then sends the final context into a local \texttt{llama.cpp} generation model.
 
-\textbf{Challenge 2: Multi-objective tuning.}
-MMR introduces a relevance-diversity tradeoff. If lambda is too high, retrieval remains redundant; if too low, chunks become diverse but less directly useful. This requires empirical tuning on multi-hop benchmarks.
+Based off of my current changes the new workflow looks something like this:
 
-\textbf{Challenge 3: End-to-end benchmark reproducibility.}
-Some local benchmark runs are sensitive to environment dependency versions (for example NumPy compatibility and optional judge imports). This impacts automation stability and requires a controlled environment lock for fair final comparisons.
+\begin{center}
+\textit{Learning Material} $\rightarrow$ \textit{Extraction} $\rightarrow$ \textit{Section-Based Chunking} $\rightarrow$ \textit{FAISS / BM25 / Index Retrieval} $\rightarrow$ \textit{Rank Fusion} $\rightarrow$ \textit{Coverage-Aware MMR Reranker} $\rightarrow$ \textit{Top Complementary Chunks} $\rightarrow$ \textit{Local Generation}
+\end{center}
 
-\textbf{Observation:} The existing TokenSmith architecture is modular enough that reranking upgrades can be inserted with limited disruption to retrieval and generation APIs.
+This is useful because it shows that the new method does not replace the existing retrieval pipeline, but instead improves the final evidence selection stage with the new component I have added for the MMR re-ranker. The baseline code already separates retrieval, score fusion, reranking, and generation into distinct modules, which made it possible to implement the new behavior as a focused extension rather than requiring a large-scale refactor of the codebase. Based on that modular structure, I created an implementation plan and completed the work on the \texttt{sk/project-dev} branch.
 
-\section{Background and Related Work}
-The work is grounded in RAG literature and classical IR diversification ideas. In practice, TokenSmith already applies rank fusion and cross-encoder reranking; this project extends that final stage toward set-aware selection inspired by Maximal Marginal Relevance (MMR), where ranking decisions are conditioned on previously selected evidence to reduce redundancy and improve coverage for multi-hop prompts.
+The main progress toward the 100\% goal is the implementation of a new coverage-aware reranking mode. I added configuration support for a new reranker setting so the system can switch cleanly between the existing baseline cross-encoder reranking behavior and the new MMR-based reranking mode. This was important because it preserves backward compatibility with the current pipeline while allowing direct side-by-side experiments between methods. I also added reranker-specific hyperparameters so that the relevance-diversity tradeoff can be tuned during evaluation rather than hardcoded into the implementation.
 
-\section{Evaluation Sketch and Next Steps}
-\textbf{Near-term next steps (before final submission):}
-\begin{itemize}
-    \item Run side-by-side experiments on baseline reranking and \texttt{coverage\_mmr} using the same benchmark slice.
-    \item Report retrieval-side metrics (chunk overlap/redundancy, ideal-chunk hit behavior) and answer-side metrics (semantic/keyword/NLI metrics already present in TokenSmith tests).
-    \item Measure latency overhead from coverage reranking.
-    \item Tune lambda and rerank depth for best quality-latency tradeoff.
-\end{itemize}
+I then implemented an MMR-style reranker that uses cross-encoder query-chunk relevance as the primary utility signal and applies a redundancy penalty based on similarity to already selected chunks. The formula is given below:
+\[
+\operatorname{MMR}(c_i)
+=
+\lambda \,\mathrm{CrossEncoder}(q, c_i)
+-
+(1-\lambda)\max_{c_j \in S}\mathrm{Similarity}(c_i, c_j)
+\]
 
-\textbf{Timeline to completion:}
-\begin{itemize}
-    \item Week 1: complete benchmark runs + hyperparameter sweep.
-    \item Week 2: analyze error cases and refine reranker scoring.
-    \item Week 3: finalize evaluation write-up and ablation section.
-\end{itemize}
+Here, \(q\) is the user query, \(c_i\) is a candidate chunk, and \(S\) is the set of chunks already selected by the reranker. The term \(\mathrm{CrossEncoder}(q, c_i)\) represents the relevance of chunk \(c_i\) to the query, while \(\mathrm{Similarity}(c_i, c_j)\) measures similarity between candidate chunk \(c_i\) and a previously selected chunk \(c_j\). The hyperparameter \(\lambda \in [0,1]\) controls the tradeoff between relevance and diversity.
 
-\section*{Appendix: Learning Episode (Baseline TokenSmith)}
-\textit{Setup note:} This appendix is based on baseline TokenSmith behavior and textbook-grounded chunk verification.
+Using this objective, the reranker greedily builds a final top-\(k\) chunk set by selecting candidates that are both highly relevant to the user query and less redundant with respect to chunks that have already been chosen. Basically, instead of simply selecting the individually highest-scoring chunks, the reranker attempts to build a more complementary evidence set that better matches the needs of most multi-hop questions. I also added a fallback lexical similarity path so that the reranker can still operate robustly in settings where an embedding-based chunk-chunk similarity computation does not work properly.
 
-\textbf{Question 1: What are the three passes in ARIES crash recovery?}
+In addition to the reranker itself, I implemented several supporting components. First, I integrated the new reranking behavior into both the CLI and API answer paths without changing the response API used by the frontend. This means the new reranker can be evaluated in the same interface as the baseline system. Second, I extended diagnostic logging so that the system stores reranking metadata such as selected chunk indices, score details, reranking mode information, and the parameter settings used for each evaluation run. This is especially important for my project because it allows me to inspect not only the final answer, but also the intermediate evidence selection behavior that leads to that answer.
 
-\textbf{Correct textbook chunk(s):}
-\begin{quote}
-``ARIES recovers from a system crash in three passes. Analysis pass... Redo pass... Undo pass...'' (Chunk 1247)
-\end{quote}
+I also made progress on the evaluation infrastructure needed for the final report. I added new pytest coverage for the reranking behavior, including tests for edge cases such as empty and single-candidate inputs, and scenarios where the reranker should prefer less redundant chunks under fixed relevance conditions. In addition, I prepared benchmarking support for comparing the coverage-aware reranker against baseline approaches on a harder multi-hop-focused question set. This directly follows the plan from my proposal, where I stated that I would compare ranker-only retrieval, baseline cross-encoder reranking, and the new coverage-aware reranker using both retrieval-side and answer-side analysis.
 
-\textbf{Question 2: How does ARIES determine where REDO starts?}
+Overall, the key algorithmic component has been implemented, the new reranking mode has been integrated into the existing TokenSmith pipeline, and the supporting infrastructure for diagnostics, testing, and benchmarking is in place. At this point, the main proposal goal has been implemented and the project has moved into a more evaluation-driven stage where the focus is understanding when coverage-aware reranking helps and how much latency that improvement costs.
 
-\textbf{Correct textbook chunk(s):}
-\begin{quote}
-``The analysis pass ... sets RedoLSN to the minimum of the RecLSNs of the pages in the DirtyPageTable.'' (Chunk 1248)
-\end{quote}
+\section{Correctness Testing}
+The first part of my evaluation was correctness testing of the implementation itself. Since the new reranker changes the evidence selection stage rather than the final generation model, I needed to verify both algorithmic correctness and pipeline correctness. On the algorithmic side, I added unit-style tests for edge cases such as empty candidate lists, single-candidate inputs, and deterministic scenarios where a less redundant chunk should be selected over a nearly duplicate chunk when relevance scores are close. These tests were useful for checking that the MMR objective was being applied consistently and that the reranker reduced to sensible behavior in degenerate cases.
 
-\textbf{Question 3: What does the REDO pass do?}
+On the pipeline side, I verified that the new reranking mode could be selected through the configuration system, passed through the CLI and API paths, and evaluated without changing the frontend contract. I also checked that the benchmark harness used the same generator prompt mode, retrieval configuration, and metric set across all runs so that the reranker itself was the main variable. For the final experiments, all runs used the same local models, the same \texttt{tutor} prompt mode, the same retrieval stack, and the same benchmark order. The only intentional changes were the reranking mode and, for the MMR experiments, the \(\lambda\) value and the candidate-pool size.
 
-\textbf{Correct textbook chunk(s):}
-\begin{quote}
-``The redo pass repeats history by replaying every action that is not already reflected in the page on disk. The redo pass scans the log forward from RedoLSN.'' (Chunk 1249)
-\end{quote}
+An important part of correctness testing was the benchmark design itself. Earlier iterations of the benchmark mixed easier questions with distractor-style prompts and did not reflect the exact setting where the reranker was supposed to help. Based on those observations, I rebuilt the evaluation around a new hard benchmark that contains sixteen questions total, with three single-hop questions and thirteen multi-hop questions, and no distractor questions. The benchmark was intentionally designed so that many of the questions require combining multiple pieces of textbook evidence rather than retrieving one isolated fact.
 
-\textbf{Question 4: What happens during the UNDO pass?}
+The dataset was constructed directly from the extracted textbook sections already produced by the TokenSmith indexing pipeline. I used the structured chunk artifacts and metadata generated from the textbook extraction stage to inspect where different topics, definitions, and mechanisms were located in the book. From there, I wrote benchmark questions that followed the same learning-oriented style as the project goal, especially questions that combine a concept definition with a system behavior, compare two related techniques, or require stitching together evidence from different pages. This was important because a reranker only has a chance to show its value when the evaluation data actually contains questions that need coverage across multiple chunks.
 
-\textbf{Correct textbook chunk(s):}
-\begin{quote}
-``The undo pass ... performs a single backward scan of the log, undoing all transactions in undo-list.'' (Chunk 1250)
-\end{quote}
+I also spent time refreshing the oracle labels used for retrieval-side scoring. Earlier benchmark versions reused chunk identifiers that became stale as the extraction and chunking pipeline changed, which made the reranker look worse than it actually was because the benchmark was sometimes measuring against outdated chunk references. To correct that, I manually traced each question back to the current extracted chunks and then added both \texttt{ideal\_retrieved\_chunks} and \texttt{ideal\_retrieved\_pages} for the new benchmark. The chunk-level labels identify the most directly useful evidence snippets, while the page-level labels help preserve a stable notion of relevance even when chunk boundaries shift slightly. In practice, this made the benchmark much more aligned with the actual current index and gave a more reliable view of retrieval coverage.
 
-\textbf{Question 5: Why is this flow useful for atomicity?}
+Finally, I used a parameter-sweep setup to test the behavior of the coverage-aware reranker under controlled settings. In addition to comparing against the \texttt{none} and \texttt{cross\_encoder} baselines, I ran MMR with \(\lambda \in \{0.5, 0.75, 0.9\}\) and candidate-pool sizes of 30 and 50. Each run was written to its own timestamped results directory, which preserved all logs and summaries and made it possible to compare the settings side by side without overwriting previous experiments.
 
-\textbf{Correct textbook chunk(s):}
-\begin{quote}
-Combined evidence from Chunks 1247--1250: analysis identifies incomplete transactions, redo repeats needed history safely, and undo rolls back uncommitted work to preserve all-or-nothing effects.
-\end{quote}
+\section{Experimental Results}
+One of the biggest observations from my work so far is that the original proposal motivation was fairly accurate where relevance-only reranking is not well matched for multi-hop retrieval. During the harder benchmark runs, when questions required evidence from different sections of the textbook, simply taking the individually highest-scoring chunks often led to context windows that overrepresented one part of the question. At the same time, the results also showed that the baseline \texttt{none} setting is not a weak baseline because it still benefits from the full hybrid retrieval stack before reranking is applied. This is why the experimental question was not whether MMR can beat a trivial retriever, but whether it can improve on a fairly strong hybrid baseline.
+
+Table~\ref{tab:hard-results} summarizes the latest results from the hard multi-hop benchmark. The best overall setting was the coverage-aware reranker with \(\lambda = 0.75\) and candidate-pool size 30. This setting achieved the highest mean final score, the highest pass rate, and the highest chunk-hit ratio, while keeping latency close to the other practical settings.
+
+\begin{table}[t]
+  \caption{Hard multi-hop benchmark results using the latest sweep.}
+  \label{tab:hard-results}
+  \centering
+  \begin{tabular}{lcccc}
+    \toprule
+    Setting & Final Score & Pass Rate & Latency (s) & Chunk Hit \\
+    \midrule
+    none & 0.7095 & 50.00\% & 8.87 & 0.2615 \\
+    cross\_encoder & 0.7027 & 56.25\% & 8.20 & 0.3000 \\
+    MMR (\(\lambda=0.5\), pool 30) & 0.7346 & 56.25\% & 9.15 & 0.2719 \\
+    MMR (\(\lambda=0.75\), pool 30) & \textbf{0.7350} & \textbf{62.50\%} & 9.91 & \textbf{0.3125} \\
+    MMR (\(\lambda=0.75\), pool 50) & 0.7349 & \textbf{62.50\%} & 10.72 & 0.2844 \\
+    MMR (\(\lambda=0.9\), pool 30) & 0.6916 & 43.75\% & 9.36 & 0.3000 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The category-level results were especially informative. On the thirteen multi-hop questions, the best MMR setting reached a mean final score of 0.7681 with a 76.92\% pass rate, compared with 0.7268 and 53.85\% for \texttt{none}, and 0.7236 and 61.54\% for \texttt{cross\_encoder}. This is the clearest evidence that the new reranker is helping in the setting it was designed for. However, the single-hop results moved in the opposite direction. On the three single-hop questions, the stronger MMR settings underperformed the baselines, which suggests that coverage-aware diversification is most useful when the question genuinely needs complementary evidence and is less useful for narrower factual prompts.
+
+This difference between single-hop and multi-hop performance was one of the main reasons I shifted the evaluation emphasis toward the harder benchmark. In earlier comparisons, the reranker often seemed to perform about equally well on simpler single-hop questions, which made the overall averages look flatter than the project motivation would suggest. But that equal performance is actually informative. For a narrow question with one clearly relevant chunk, there is less room for a coverage-aware method to improve over a strong baseline, because the baseline already retrieves enough information. The reranker becomes more meaningful only when the answer depends on bringing together multiple complementary pieces of evidence. Once I expanded the multi-hop portion of the dataset and removed distractor-heavy prompts, the improvement pattern became much easier to see. This supports the idea that the project is really about improving complex learning-oriented retrieval rather than trying to dominate every easier question equally.
+
+The parameter sweep also made the relevance-diversity tradeoff much clearer. If the coverage penalty is too weak, the method behaves too much like the baseline cross-encoder reranker and does not reduce redundancy enough. If the penalty is too strong, the reranker may select chunks that are more different but less directly relevant. In the final results, \(\lambda=0.75\) was the strongest setting, while \(\lambda=0.9\) consistently hurt performance. This suggests that pushing the reranker too far toward pure relevance removes the main advantage of MMR, while a moderate coverage penalty gives the model enough flexibility to include complementary evidence. Candidate-pool size showed a different tradeoff. A pool of 50 did not improve accuracy over 30, but it did increase latency noticeably, which means a larger pool mostly adds noise and compute cost rather than useful evidence.
+
+Another useful observation is that the final answer metric does not always move in perfect agreement with the chunk-hit metric. Some questions received good semantic and NLI scores even when the chunk oracle match was weak, which means the local generation model can sometimes answer from partial evidence or prior knowledge. Even with that limitation, the hard benchmark still shows a meaningful pattern. Coverage-aware reranking helps most on questions that combine definitions with mechanisms, compare multiple concepts, or require linking evidence across different sections of the textbook. Examples from the benchmark where MMR helped include the B\(^+\)-tree sorting and join tradeoff question, the lossless decomposition question, and the snapshot-versus-locking questions. On the other hand, some ARIES questions remained difficult for all settings, which suggests that candidate recall and chunk granularity are still limiting factors beyond reranking alone.
+
+Latency also became an important part of the analysis rather than just a secondary metric. The best MMR configuration improved accuracy, but it did so with some added cost. Compared with \texttt{none}, the best setting increased mean latency from 8.87 seconds to 9.91 seconds, which is a noticeable but still manageable overhead for a local educational question-answering system. The higher-cost settings show why this tradeoff matters. For example, increasing the candidate pool to 50 raised latency to over 10.7 seconds without providing a meaningful accuracy gain over the 30-candidate setting. This means the extra compute is not automatically justified. In contrast, the \(\lambda=0.75\), pool-30 configuration gives a more reasonable quality-latency balance: it improves the pass rate from 50.00\% to 62.50\% while increasing average latency by a little over one second. For this project, that is a useful tradeoff because the goal is not just to reduce runtime, but to improve the completeness of answers on harder textbook questions while still keeping the system practical for local use.
+
+\section{Future Work}
+The main proposal goal has been completed, but the experiments also showed several directions for extending and improving the project. First, I want to perform a narrower sweep around the best MMR setting, especially around \(\lambda\) values near 0.7 to 0.8 while keeping the candidate pool near 30. This would help determine whether the current best setting is stable or if there is a slightly better operating point nearby.
+
+Second, I want to improve the evaluation further by logging more detailed post-reranking evidence information directly into the benchmark outputs. This would make it easier to separate cases where the answer improves because the reranker actually selected a better evidence set from cases where the answer metric improves for other reasons. Third, I want to explore alternatives that go beyond reranking alone. The harder ARIES questions in particular suggest that some remaining failures come from candidate recall and chunking rather than just from the ordering of already retrieved chunks. Because of that, section-aware retrieval, query decomposition, or chunk-size adjustments may be promising next directions.
+
+Overall, the final results support the original proposal motivation with a more precise conclusion. Coverage-aware reranking does improve TokenSmith’s support for harder multi-hop textbook queries, but the improvement is conditional. It helps most when the question requires complementary evidence, and it does not automatically dominate on simpler prompts. That still satisfies the original 100\% goal of extending the reranker to incorporate coverage-aware signals, while also producing a clearer understanding of the quality-latency tradeoff and the conditions under which the method is most useful.
+
 
 \end{document}

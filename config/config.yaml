@@ -4,7 +4,7 @@ embedding_model_context_window: 4096
 top_k: 10
 num_candidates: 50
 ensemble_method: "rrf"
-ranker_weights: {"faiss":1,"bm25":0,"index_keywords":0}
+ranker_weights: {"faiss":0.7,"bm25":0.3,"index_keywords":0.0}
 rrf_k: 60
 max_gen_tokens: 400
 chunk_mode : "recursive_sections"
@@ -16,7 +16,9 @@ hyde_max_tokens: 300
 use_indexed_chunks: false
 rerank_mode: "cross_encoder"
 rerank_top_k: 5
-coverage_mmr_lambda: 0.7
+rerank_candidate_pool: 20
+coverage_mmr_candidate_pool: 40
+coverage_mmr_lambda: 0.6
 coverage_mmr_similarity_metric: "cosine"
 use_double_prompt: false
 enable_history: true

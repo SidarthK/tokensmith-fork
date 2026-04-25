@@ -30,12 +30,14 @@ class RAGConfig:
     )
     rerank_mode: str = ""
     rerank_top_k: int = 5
+    rerank_candidate_pool: int = 20
+    coverage_mmr_candidate_pool: int = 40
     coverage_mmr_lambda: float = 0.7
     coverage_mmr_similarity_metric: str = "cosine"
 
     # generation
     max_gen_tokens: int = 400
-    gen_model: str = "models/generators/qwen2.5-3b-instruct-q8_0.gguf"
+    gen_model: str = "models/generators/qwen2.5-1.5b-instruct-q8_0.gguf"
     
     # testing
     system_prompt_mode: str = "baseline"
@@ -71,18 +73,17 @@ class RAGConfig:
     def from_yaml(cls, path: os.PathLike) -> RAGConfig:
         with open(path, 'r') as f:
             data = yaml.safe_load(f)
-        # if not isinstance(data, dict):
-        #     data = {}
+        if not isinstance(data, dict):
+            data = {}
 
-        # # Backward-compatible aliases for older config files.
-        # if "chunk_size_in_chars" in data and "chunk_size" not in data:
-        #     data["chunk_size"] = data.pop("chunk_size_in_chars")
-        # if "model_path" in data and "gen_model" not in data:
-        #     data["gen_model"] = data.pop("model_path")
+        # Accept older config files after merges/refactors.
+        if "chunk_size" in data and "chunk_size_in_chars" not in data:
+            data["chunk_size_in_chars"] = data.pop("chunk_size")
+        if "model_path" in data and "gen_model" not in data:
+            data["gen_model"] = data.pop("model_path")
 
-        # # Ignore unknown keys instead of crashing on constructor mismatch.
-        # valid_fields = set(inspect.signature(cls).parameters.keys())
-        # data = {k: v for k, v in data.items() if k in valid_fields}
+        valid_fields = set(inspect.signature(cls).parameters.keys())
+        data = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**data)
 
     def __post_init__(self):
@@ -91,6 +92,10 @@ class RAGConfig:
         assert self.num_candidates >= self.top_k, "num_candidates must be >= top_k"
         assert self.ensemble_method.lower() in {"linear","weighted","rrf"}
         assert self.rerank_top_k > 0, "rerank_top_k must be > 0"
+        assert self.rerank_candidate_pool >= self.rerank_top_k, \
+            "rerank_candidate_pool must be >= rerank_top_k"
+        assert self.coverage_mmr_candidate_pool >= self.rerank_top_k, \
+            "coverage_mmr_candidate_pool must be >= rerank_top_k"
         assert self.rerank_mode in {"", "none", "cross_encoder", "coverage_mmr"}, \
             "rerank_mode must be one of: '', none, cross_encoder, coverage_mmr"
         assert 0.0 <= self.coverage_mmr_lambda <= 1.0, "coverage_mmr_lambda must be in [0, 1]"
@@ -151,6 +156,13 @@ class RAGConfig:
     def get_page_to_chunk_map_path(self, artifacts_dir: os.PathLike, index_prefix: str) -> os.PathLike:
         """Returns the path to the page-to-chunk map file."""
         return pathlib.Path(artifacts_dir) / f"{index_prefix}_page_to_chunk_map.json"
+
+    def get_rerank_candidate_pool_size(self, requested_top_k: int | None = None) -> int:
+        effective_top_k = self.top_k if requested_top_k is None else requested_top_k
+        base_pool = max(self.rerank_candidate_pool, self.rerank_top_k, effective_top_k)
+        if self.rerank_mode == "coverage_mmr":
+            return max(base_pool, self.coverage_mmr_candidate_pool, self.rerank_top_k * 6)
+        return base_pool
     
     def get_config_state(self) -> None:
         """Returns dict of all config parameters except chunk_config """

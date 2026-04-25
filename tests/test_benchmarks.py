@@ -2,6 +2,7 @@ import json
 import pytest
 from pathlib import Path
 from datetime import datetime
+import time
 from tests.metrics import SimilarityScorer
 
 
@@ -77,6 +78,7 @@ def run_benchmark(benchmark, config, results_dir, scorer):
     threshold = config["threshold_override"] or benchmark["similarity_threshold"] or 0.6 
     golden_chunks = benchmark.get("golden_chunks", None)
     ideal_retrieved_chunks = benchmark.get("ideal_retrieved_chunks", None)
+    ideal_retrieved_pages = benchmark.get("ideal_retrieved_pages", None)
 
     # Print header
     print(f"\n{'─'*60}")
@@ -86,6 +88,7 @@ def run_benchmark(benchmark, config, results_dir, scorer):
     print(f"{'─'*60}")
     
     # Get answer from TokenSmith
+    start_time = time.perf_counter()
     try:
         retrieved_answer, chunks_info, hyde_query = get_tokensmith_answer(
             question=question,
@@ -100,6 +103,7 @@ def run_benchmark(benchmark, config, results_dir, scorer):
         traceback.print_exc()
         logging.exception("Error running TokenSmith")
         return {"passed": False}
+    latency_seconds = time.perf_counter() - start_time
 
     
     # Validate answer
@@ -111,7 +115,15 @@ def run_benchmark(benchmark, config, results_dir, scorer):
     
     # Calculate scores
     try:
-        scores = scorer.calculate_scores(retrieved_answer, expected_answer, keywords, question=question, ideal_retrieved_chunks=ideal_retrieved_chunks, actual_retrieved_chunks=chunks_info)
+        scores = scorer.calculate_scores(
+            retrieved_answer,
+            expected_answer,
+            keywords,
+            question=question,
+            ideal_retrieved_chunks=ideal_retrieved_chunks,
+            ideal_retrieved_pages=ideal_retrieved_pages,
+            actual_retrieved_chunks=chunks_info,
+        )
     except Exception as e:
         error_msg = f"Scoring error: {e}"
         print(f"  ❌ FAILED: {error_msg}")
@@ -128,13 +140,17 @@ def run_benchmark(benchmark, config, results_dir, scorer):
     # Save detailed result
     result_data = {
         "test_id": benchmark_id,
+        "question_category": benchmark_id.split("_", 1)[0] if "_" in benchmark_id else "uncategorized",
         "question": question,
         "expected_answer": expected_answer,
         "retrieved_answer": retrieved_answer,
         "keywords": keywords,
         "threshold": threshold,
+        "ideal_retrieved_chunks": ideal_retrieved_chunks if ideal_retrieved_chunks else [],
+        "ideal_retrieved_pages": ideal_retrieved_pages if ideal_retrieved_pages else [],
         "scores": scores,
         "passed": passed,
+        "latency_seconds": latency_seconds,
         "active_metrics": scores.get("active_metrics", []),
         "metric_weights": get_metric_weights(scorer, scores.get("active_metrics", [])),
         "chunks_info": chunks_info if chunks_info else [],
@@ -190,13 +206,19 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
     # Create RAGConfig from our test config
     cfg = RAGConfig(
         chunk_mode=config.get("chunk_mode", "recursive_sections"),
+        chunk_size_in_chars=config.get("chunk_size_in_chars", 2000),
+        chunk_overlap=config.get("chunk_overlap", 200),
         top_k=config.get("top_k", 10),
+        num_candidates=config.get("num_candidates", 50),
         embed_model=config.get("embed_model"),
-        ensemble_method=config.get("retrieval_method", "rrf"),
+        ensemble_method=config.get("ensemble_method", "rrf"),
         rrf_k=60,
         ranker_weights=config.get("ranker_weights", {"faiss": 1, "bm25": 0}),
         rerank_mode=config.get("rerank_mode", "none"),
         rerank_top_k=config.get("rerank_top_k", 5),
+        rerank_candidate_pool=config.get("rerank_candidate_pool", 20),
+        coverage_mmr_candidate_pool=config.get("coverage_mmr_candidate_pool", 40),
+        coverage_mmr_lambda=config.get("coverage_mmr_lambda", 0.7),
         system_prompt_mode=config.get("system_prompt_mode", "baseline"),
         max_gen_tokens=config.get("max_gen_tokens", 400),
         disable_chunks=config.get("disable_chunks", False),
