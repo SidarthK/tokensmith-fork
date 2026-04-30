@@ -34,6 +34,11 @@ class RAGConfig:
     coverage_mmr_candidate_pool: int = 40
     coverage_mmr_lambda: float = 0.7
     coverage_mmr_similarity_metric: str = "cosine"
+    use_query_decomposition: bool = False
+    decomposition_max_subquestions: int = 4
+    decomposition_candidate_pool: int = 12
+    decomposition_merge_strategy: str = "union_max"
+    coverage_subquestion_weight: float = 0.35
 
     # generation
     max_gen_tokens: int = 400
@@ -96,14 +101,23 @@ class RAGConfig:
             "rerank_candidate_pool must be >= rerank_top_k"
         assert self.coverage_mmr_candidate_pool >= self.rerank_top_k, \
             "coverage_mmr_candidate_pool must be >= rerank_top_k"
-        assert self.rerank_mode in {"", "none", "cross_encoder", "coverage_mmr"}, \
-            "rerank_mode must be one of: '', none, cross_encoder, coverage_mmr"
+        assert self.rerank_mode in {"", "none", "cross_encoder", "coverage_mmr", "decompose_then_coverage_mmr"}, \
+            "rerank_mode must be one of: '', none, cross_encoder, coverage_mmr, decompose_then_coverage_mmr"
         assert 0.0 <= self.coverage_mmr_lambda <= 1.0, "coverage_mmr_lambda must be in [0, 1]"
         assert self.coverage_mmr_similarity_metric in {"cosine"}, \
             "coverage_mmr_similarity_metric currently supports only 'cosine'"
+        assert self.decomposition_max_subquestions > 0, "decomposition_max_subquestions must be > 0"
+        assert self.decomposition_candidate_pool >= self.rerank_top_k, \
+            "decomposition_candidate_pool must be >= rerank_top_k"
+        assert self.decomposition_merge_strategy in {"union_max"}, \
+            "decomposition_merge_strategy currently supports only 'union_max'"
+        assert 0.0 <= self.coverage_subquestion_weight <= 1.0, \
+            "coverage_subquestion_weight must be in [0, 1]"
         if self.ensemble_method.lower() in {"linear","weighted"}:
             s = sum(self.ranker_weights.values()) or 1.0
             self.ranker_weights = {k: v / s for k, v in self.ranker_weights.items()}
+        if self.rerank_mode == "decompose_then_coverage_mmr":
+            self.use_query_decomposition = True
         self.chunk_config = self.get_chunk_config()
         self.chunk_config.validate()
 
@@ -162,6 +176,12 @@ class RAGConfig:
         base_pool = max(self.rerank_candidate_pool, self.rerank_top_k, effective_top_k)
         if self.rerank_mode == "coverage_mmr":
             return max(base_pool, self.coverage_mmr_candidate_pool, self.rerank_top_k * 6)
+        if self.rerank_mode == "decompose_then_coverage_mmr":
+            return max(
+                base_pool,
+                self.coverage_mmr_candidate_pool,
+                self.decomposition_candidate_pool * max(self.decomposition_max_subquestions, 2),
+            )
         return base_pool
     
     def get_config_state(self) -> None:

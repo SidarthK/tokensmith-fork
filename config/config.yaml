@@ -20,6 +20,11 @@ rerank_candidate_pool: 20
 coverage_mmr_candidate_pool: 40
 coverage_mmr_lambda: 0.6
 coverage_mmr_similarity_metric: "cosine"
+use_query_decomposition: false
+decomposition_max_subquestions: 4
+decomposition_candidate_pool: 12
+decomposition_merge_strategy: "union_max"
+coverage_subquestion_weight: 0.35
 use_double_prompt: false
 enable_history: true
 max_history_turns: 3

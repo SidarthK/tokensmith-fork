@@ -11,8 +11,6 @@ from uuid import uuid4
 from copy import deepcopy
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
-import traceback
-import os
 
 # Add project root to Python path to allow imports when run directly
 _project_root = pathlib.Path(__file__).resolve().parent.parent
@@ -34,6 +32,7 @@ from src.feedback_store import (
     update_user_topic_state,
 )
 from src.instrumentation.logging import get_logger
+from src.query_enhancement import decompose_complex_query
 from src.ranking.ranker import EnsembleRanker
 from src.ranking.reranker import rerank
 from src.retriever import filter_retrieved_chunks, BM25Retriever, FAISSRetriever, IndexKeywordRetriever, get_page_numbers, load_artifacts
@@ -171,22 +170,113 @@ def _create_log(chunks , sources , topk_idxs, ordered_ranked_scores, page_nums, 
     except Exception as log_exc:
         return False
 
-def _retrieve_and_rank(query: str, top_k: Optional[int] = None):
+
+def _build_candidate_map(ordered_ids: List[int], ordered_scores: List[float]) -> Dict[int, float]:
+    return {chunk_id: float(score) for chunk_id, score in zip(ordered_ids, ordered_scores)}
+
+
+def _normalize_subquestions(question: str, raw_subquestions: List[str], max_subquestions: int) -> List[str]:
+    seen = {question.strip().lower()}
+    normalized_subquestions: List[str] = []
+    for subquestion in raw_subquestions:
+        normalized = " ".join(subquestion.split()).strip()
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized_subquestions.append(normalized)
+        if len(normalized_subquestions) >= max_subquestions:
+            break
+    return normalized_subquestions
+
+
+def _retrieve_ranked_candidates(query: str, candidate_limit: int):
     chunks = _artifacts["chunks"]
-    effective_top_k = top_k if top_k is not None else _config.top_k
-    pool_n = max(_config.num_candidates, _config.get_rerank_candidate_pool_size(effective_top_k), effective_top_k + 10)
+    pool_n = max(_config.num_candidates, candidate_limit, _config.top_k + 10)
     raw_scores: Dict[str, Dict[int, float]] = {}
 
     for retriever in _retrievers:
         raw_scores[retriever.name] = retriever.get_scores(query, pool_n, chunks)
 
     ordered_ids, ordered_scores = _ranker.rank(raw_scores=raw_scores)
+    limited_ids = filter_retrieved_chunks(_config, chunks, ordered_ids, limit=min(len(ordered_ids), candidate_limit))
+    return raw_scores, ordered_ids, ordered_scores, limited_ids, _build_candidate_map(ordered_ids, ordered_scores)
 
-    candidate_pool_size = min(len(ordered_ids), _config.get_rerank_candidate_pool_size(effective_top_k))
-    ordered_ids = ordered_ids[:candidate_pool_size]
-    ordered_scores = ordered_scores[:candidate_pool_size]
-
+def _retrieve_and_rank(query: str, top_k: Optional[int] = None):
+    chunks = _artifacts["chunks"]
+    effective_top_k = top_k if top_k is not None else _config.top_k
     rerank_info = {"rerank_mode": _config.rerank_mode}
+
+    if _config.rerank_mode == "decompose_then_coverage_mmr":
+        raw_subquestions = decompose_complex_query(query, _config.gen_model)
+        subquestions = _normalize_subquestions(query, raw_subquestions, _config.decomposition_max_subquestions)
+        query_list = [query, *subquestions] if subquestions else [query]
+
+        merged_score_map: Dict[int, float] = {}
+        merged_raw_scores: Dict[str, Dict[int, float]] = {}
+        query_candidate_runs: List[Dict[str, object]] = []
+
+        for retrieval_query in query_list:
+            (
+                query_raw_scores,
+                ordered_ids,
+                ordered_scores,
+                limited_ids,
+                fused_score_map,
+            ) = _retrieve_ranked_candidates(retrieval_query, _config.decomposition_candidate_pool)
+
+            query_candidate_runs.append({
+                "query": retrieval_query,
+                "candidate_ids": limited_ids,
+                "candidate_scores": [float(fused_score_map.get(chunk_id, 0.0)) for chunk_id in limited_ids],
+            })
+
+            for retriever_name, score_map in query_raw_scores.items():
+                merged_raw_scores.setdefault(retriever_name, {})
+                for chunk_id, score in score_map.items():
+                    current = merged_raw_scores[retriever_name].get(chunk_id, float("-inf"))
+                    if score > current:
+                        merged_raw_scores[retriever_name][chunk_id] = score
+
+            for chunk_id in limited_ids:
+                merged_score_map[chunk_id] = max(
+                    merged_score_map.get(chunk_id, float("-inf")),
+                    fused_score_map.get(chunk_id, 0.0),
+                )
+
+        ordered_ids = [chunk_id for chunk_id, _score in sorted(merged_score_map.items(), key=lambda item: item[1], reverse=True)]
+        ordered_scores = [merged_score_map[chunk_id] for chunk_id in ordered_ids]
+        candidate_pool_size = min(len(ordered_ids), _config.get_rerank_candidate_pool_size(effective_top_k))
+        ordered_ids = filter_retrieved_chunks(_config, chunks, ordered_ids, limit=candidate_pool_size)
+        ordered_scores = [merged_score_map[chunk_id] for chunk_id in ordered_ids]
+        raw_scores = merged_raw_scores
+        rerank_info.update({
+            "retrieval_mode": "decompose_then_merge",
+            "subquestions": subquestions,
+            "query_candidate_runs": query_candidate_runs,
+            "merged_candidate_pool_size": len(merged_score_map),
+            "selected_candidate_pool_size": len(ordered_ids),
+        })
+    else:
+        raw_scores, ordered_all_ids, _ordered_all_scores, ordered_ids, fused_score_map = _retrieve_ranked_candidates(
+            query,
+            _config.get_rerank_candidate_pool_size(effective_top_k),
+        )
+        ordered_scores = [float(fused_score_map.get(chunk_id, 0.0)) for chunk_id in ordered_ids]
+        rerank_info.update({
+            "retrieval_mode": "single_query",
+            "subquestions": [],
+            "query_candidate_runs": [{
+                "query": query,
+                "candidate_ids": ordered_ids,
+                "candidate_scores": [float(score) for score in ordered_scores],
+            }],
+            "merged_candidate_pool_size": len(ordered_all_ids),
+            "selected_candidate_pool_size": len(ordered_ids),
+        })
+
     if ordered_ids:
         candidate_chunks = [_artifacts["chunks"][i] for i in ordered_ids]
         reranked_chunks, diagnostics = rerank(
@@ -195,6 +285,8 @@ def _retrieve_and_rank(query: str, top_k: Optional[int] = None):
             mode=_config.rerank_mode,
             top_n=min(_config.rerank_top_k, len(candidate_chunks)),
             coverage_mmr_lambda=_config.coverage_mmr_lambda,
+            coverage_subquestion_weight=_config.coverage_subquestion_weight,
+            subquestions=rerank_info.get("subquestions", []),
             embed_model_path=_config.embed_model,
             return_diagnostics=True,
         )
@@ -203,6 +295,7 @@ def _retrieve_and_rank(query: str, top_k: Optional[int] = None):
         ordered_scores = [ordered_scores[i] for i in selected_local_indices if 0 <= i < len(ordered_scores)]
         rerank_info["rerank_diagnostics"] = diagnostics
         rerank_info["reranked_chunk_count"] = len(reranked_chunks)
+        rerank_info["selected_chunk_ids"] = ordered_ids
 
     ordered_ids = ordered_ids[:effective_top_k]
     ordered_scores = ordered_scores[:effective_top_k]
