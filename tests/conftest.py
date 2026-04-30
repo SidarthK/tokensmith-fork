@@ -91,7 +91,7 @@ def pytest_addoption(parser):
     )
     group.addoption(
         "--rerank-mode",
-        choices=["none", "cross_encoder", "coverage_mmr"],
+        choices=["none", "cross_encoder", "coverage_mmr", "decompose_then_coverage_mmr"],
         default=None,
         help="Reranking mode override for benchmark experiments"
     )
@@ -106,6 +106,24 @@ def pytest_addoption(parser):
         type=int,
         default=None,
         help="Override coverage-aware MMR candidate pool size"
+    )
+    group.addoption(
+        "--coverage-subquestion-weight",
+        type=float,
+        default=None,
+        help="Override subquestion coverage weight for decomposition-aware reranking"
+    )
+    group.addoption(
+        "--decomposition-candidate-pool",
+        type=int,
+        default=None,
+        help="Override per-subquestion candidate pool size for decomposition-aware retrieval"
+    )
+    group.addoption(
+        "--decomposition-max-subquestions",
+        type=int,
+        default=None,
+        help="Override maximum number of generated subquestions"
     )
     
     # === Testing Options ===
@@ -183,6 +201,11 @@ def config(pytestconfig):
         "rerank_candidate_pool": cfg.get("rerank_candidate_pool", 20),
         "coverage_mmr_candidate_pool": pytestconfig.getoption("--coverage-mmr-candidate-pool") or cfg.get("coverage_mmr_candidate_pool", 40),
         "coverage_mmr_lambda": pytestconfig.getoption("--coverage-mmr-lambda") or cfg.get("coverage_mmr_lambda", 0.7),
+        "coverage_subquestion_weight": pytestconfig.getoption("--coverage-subquestion-weight") or cfg.get("coverage_subquestion_weight", 0.35),
+        "use_query_decomposition": cfg.get("use_query_decomposition", False),
+        "decomposition_max_subquestions": pytestconfig.getoption("--decomposition-max-subquestions") or cfg.get("decomposition_max_subquestions", 4),
+        "decomposition_candidate_pool": pytestconfig.getoption("--decomposition-candidate-pool") or cfg.get("decomposition_candidate_pool", 12),
+        "decomposition_merge_strategy": cfg.get("decomposition_merge_strategy", "union_max"),
         "seg_filter": cfg.get("seg_filter", None),
         "chunk_mode": cfg.get("chunk_mode", "recursive_sections"),
         "chunk_size_in_chars": cfg.get("chunk_size_in_chars", cfg.get("recursive_chunk_size", 2000)),

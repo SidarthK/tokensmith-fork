@@ -56,6 +56,14 @@ def print_test_config(config, scorer):
     #     print(f"    • Tag weight:     {config['tag_weight']:.2f}")
     
     print(f"  System Prompt:      {config['system_prompt_mode']}")
+    print(f"  Rerank Mode:        {config['rerank_mode']}")
+    if config["rerank_mode"] in {"coverage_mmr", "decompose_then_coverage_mmr"}:
+        print(f"    • MMR lambda:     {config.get('coverage_mmr_lambda', 0.7):.2f}")
+        print(f"    • Candidate pool: {config.get('coverage_mmr_candidate_pool', 40)}")
+    if config["rerank_mode"] == "decompose_then_coverage_mmr":
+        print(f"    • Subquestion wt: {config.get('coverage_subquestion_weight', 0.35):.2f}")
+        print(f"    • Decomp pool:    {config.get('decomposition_candidate_pool', 12)}")
+        print(f"    • Max subqs:      {config.get('decomposition_max_subquestions', 4)}")
     print(f"  Chunks Enabled:     {not config['disable_chunks']}")
     print(f"  Golden Chunks:      {config['use_golden_chunks']}")
     print(f"  HyDE Enabled:       {config.get('use_hyde', False)}")
@@ -79,6 +87,8 @@ def run_benchmark(benchmark, config, results_dir, scorer):
     golden_chunks = benchmark.get("golden_chunks", None)
     ideal_retrieved_chunks = benchmark.get("ideal_retrieved_chunks", None)
     ideal_retrieved_pages = benchmark.get("ideal_retrieved_pages", None)
+    question_family = benchmark.get("family", benchmark_id.split("_", 1)[0] if "_" in benchmark_id else "uncategorized")
+    question_topic = benchmark.get("topic", "general")
 
     # Print header
     print(f"\n{'─'*60}")
@@ -90,7 +100,7 @@ def run_benchmark(benchmark, config, results_dir, scorer):
     # Get answer from TokenSmith
     start_time = time.perf_counter()
     try:
-        retrieved_answer, chunks_info, hyde_query = get_tokensmith_answer(
+        retrieved_answer, chunks_info, hyde_query, retrieval_debug = get_tokensmith_answer(
             question=question,
             config=config,
             golden_chunks=golden_chunks if config["use_golden_chunks"] else None
@@ -141,6 +151,8 @@ def run_benchmark(benchmark, config, results_dir, scorer):
     result_data = {
         "test_id": benchmark_id,
         "question_category": benchmark_id.split("_", 1)[0] if "_" in benchmark_id else "uncategorized",
+        "question_family": question_family,
+        "question_topic": question_topic,
         "question": question,
         "expected_answer": expected_answer,
         "retrieved_answer": retrieved_answer,
@@ -155,11 +167,17 @@ def run_benchmark(benchmark, config, results_dir, scorer):
         "metric_weights": get_metric_weights(scorer, scores.get("active_metrics", [])),
         "chunks_info": chunks_info if chunks_info else [],
         "hyde_query": hyde_query if hyde_query else None,
+        "retrieval_debug": retrieval_debug if retrieval_debug else {},
         "timestamp": datetime.now().isoformat(),
         "config": {
             "model_path": config["model_path"],
             "embed_model": config["embed_model"],
-            # "retrieval_method": config["retrieval_method"],
+            "rerank_mode": config.get("rerank_mode", "none"),
+            "coverage_mmr_lambda": config.get("coverage_mmr_lambda", 0.7),
+            "coverage_mmr_candidate_pool": config.get("coverage_mmr_candidate_pool", 40),
+            "coverage_subquestion_weight": config.get("coverage_subquestion_weight", 0.35),
+            "decomposition_candidate_pool": config.get("decomposition_candidate_pool", 12),
+            "decomposition_max_subquestions": config.get("decomposition_max_subquestions", 4),
             "system_prompt_mode": config["system_prompt_mode"],
             "disable_chunks": config["disable_chunks"],
             "use_golden_chunks": config["use_golden_chunks"],
@@ -187,7 +205,7 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
         golden_chunks: Optional list of golden chunks to use instead of retrieval
     
     Returns:
-        tuple: (Generated answer, chunks_info list, hyde_query)
+        tuple: (generated answer, chunks_info list, hyde_query, retrieval_debug)
     """
     from src.main import get_answer
     from src.instrumentation.logging import get_logger
@@ -219,6 +237,11 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
         rerank_candidate_pool=config.get("rerank_candidate_pool", 20),
         coverage_mmr_candidate_pool=config.get("coverage_mmr_candidate_pool", 40),
         coverage_mmr_lambda=config.get("coverage_mmr_lambda", 0.7),
+        coverage_subquestion_weight=config.get("coverage_subquestion_weight", 0.35),
+        use_query_decomposition=config.get("use_query_decomposition", False),
+        decomposition_max_subquestions=config.get("decomposition_max_subquestions", 4),
+        decomposition_candidate_pool=config.get("decomposition_candidate_pool", 12),
+        decomposition_merge_strategy=config.get("decomposition_merge_strategy", "union_max"),
         system_prompt_mode=config.get("system_prompt_mode", "baseline"),
         max_gen_tokens=config.get("max_gen_tokens", 400),
         disable_chunks=config.get("disable_chunks", False),
@@ -274,7 +297,7 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
         "sources": sources,
         "retrievers": retrievers,
         "ranker": ranker,
-        "metadata": metadata,
+        "meta": metadata,
     }
 
     result = get_answer(
@@ -288,16 +311,25 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
         is_test_mode=True
     )
     
-    # Handle return value (answer, chunks_info, hyde_query) or just answer
+    # Handle return value (answer, chunks_info, hyde_query, retrieval_debug) or just answer
     if isinstance(result, tuple):
-        generated, chunks_info, hyde_query = result
+        if len(result) == 4:
+            generated, chunks_info, hyde_query, retrieval_debug = result
+        elif len(result) == 3:
+            generated, chunks_info, hyde_query = result
+            retrieval_debug = {}
+        else:
+            generated = result[0]
+            chunks_info = None
+            hyde_query = None
+            retrieval_debug = {}
     else:
-        generated, chunks_info, hyde_query = result, None, None
+        generated, chunks_info, hyde_query, retrieval_debug = result, None, None, {}
     
     # Clean answer - extract up to end token if present
     generated = clean_answer(generated)
     
-    return generated, chunks_info, hyde_query
+    return generated, chunks_info, hyde_query, retrieval_debug
 
 
 def clean_answer(text):
