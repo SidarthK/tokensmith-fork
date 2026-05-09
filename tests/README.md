@@ -86,6 +86,13 @@ All config options can be overridden via CLI (CLI takes priority):
 | Argument | Options | Description |
 |----------|---------|-------------|
 | `--benchmark-ids` | comma-separated | Filter specific benchmarks (e.g., "test,transactions") |
+| `--benchmarks-file` | path | Use an alternate benchmark file (e.g., `tests/benchmarks_multihop.yaml`) |
+| `--rerank-mode` | none, cross_encoder, coverage_mmr, decompose_then_coverage_mmr | Override reranker mode for comparison runs |
+| `--coverage-mmr-lambda` | float | Override MMR relevance/diversity tradeoff |
+| `--coverage-mmr-candidate-pool` | int | Override the rerank candidate pool size |
+| `--coverage-subquestion-weight` | float | Override the subquestion coverage bonus for decomposition-aware reranking |
+| `--decomposition-candidate-pool` | int | Override the per-subquestion retrieval pool used before merge |
+| `--decomposition-max-subquestions` | int | Override the maximum number of generated subquestions |
 | `--system_prompt_mode` | baseline, tutor, concise, detailed | System prompt style |
 | `--enable-chunks` | flag | Enable chunks in generation (RAG mode) |
 | `--disable-chunks` | flag | Disable chunks (baseline mode) |
@@ -201,6 +208,53 @@ for mode in baseline tutor concise detailed; do
     pytest tests/ --system_prompt_mode=$mode --benchmark-ids="test" -s
 done
 ```
+
+### Compare Baseline vs Coverage-Aware Reranking
+
+```bash
+bash scripts/run_rerank_comparison.sh
+```
+
+This writes side-by-side run logs to:
+- `tests/results/baseline_rerank_multihop.txt`
+- `tests/results/coverage_mmr_multihop.txt`
+
+### Final Report: Hard Multihop Sweep
+
+Run the harder benchmark plus the current MMR sweep and a decomposition-guided reranking sweep:
+
+```bash
+bash scripts/run_hard_multihop_sweep.sh
+```
+
+This creates a new timestamped directory on every run, so older experiments are preserved:
+- `tests/results/hard_multihop/<timestamp>/none`
+- `tests/results/hard_multihop/<timestamp>/cross_encoder`
+- `tests/results/hard_multihop/<timestamp>/mmr_l05_p30`
+- `tests/results/hard_multihop/<timestamp>/mmr_l05_p50`
+- `tests/results/hard_multihop/<timestamp>/mmr_l075_p30`
+- `tests/results/hard_multihop/<timestamp>/mmr_l075_p50`
+- `tests/results/hard_multihop/<timestamp>/mmr_l09_p30`
+- `tests/results/hard_multihop/<timestamp>/mmr_l09_p50`
+- `tests/results/hard_multihop/<timestamp>/decomp_l05_p30`
+- `tests/results/hard_multihop/<timestamp>/decomp_l075_p30`
+- `tests/results/hard_multihop/<timestamp>/decomp_l075_p50`
+- `tests/results/hard_multihop/<timestamp>/decomp_l09_p30`
+
+Each subdirectory contains:
+- `benchmark_results.json`
+- `terminal.log`
+- `run_metadata.json`
+
+The run root also includes:
+- `benchmark_snapshot.yaml`
+- `config_snapshot.yaml`
+- `sweep_summary.md`
+- `sweep_summary.csv`
+- `family_breakdown.csv`
+- `topic_breakdown.csv`
+- `question_level_scores.csv`
+- chart PNGs such as `overall_final_score.png` and `question_win_heatmap.png`
 
 ### Component Isolation (Ablation Study)
 

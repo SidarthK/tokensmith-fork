@@ -18,7 +18,7 @@ from src.index_updater import add_to_index
 from src.instrumentation.logging import get_logger
 from src.ranking.ranker import EnsembleRanker
 from src.preprocessing.chunking import DocumentChunker
-from src.query_enhancement import generate_hypothetical_document, contextualize_query
+from src.query_enhancement import generate_hypothetical_document, contextualize_query, decompose_complex_query
 from src.retriever import (
     filter_retrieved_chunks, 
     BM25Retriever, 
@@ -144,6 +144,45 @@ def use_indexed_chunks(question: str, chunks: list, cfg: RAGConfig, args: argpar
     }
     return [chunks[cid] for cid in chunk_ids], list(chunk_ids)
 
+
+def _build_candidate_map(ordered_ids: List[int], ordered_scores: List[float]) -> Dict[int, float]:
+    return {chunk_id: float(score) for chunk_id, score in zip(ordered_ids, ordered_scores)}
+
+
+def _retrieve_ranked_candidates(
+    retrieval_query: str,
+    cfg: RAGConfig,
+    chunks: List[str],
+    retrievers: List[Any],
+    ranker: Any,
+    *,
+    candidate_limit: int,
+) -> Tuple[Dict[str, Dict[int, float]], List[int], List[float], List[int], Dict[int, float]]:
+    pool_n = max(cfg.num_candidates, candidate_limit, cfg.top_k + 10)
+    raw_scores: Dict[str, Dict[int, float]] = {}
+    for retriever in retrievers:
+        raw_scores[retriever.name] = retriever.get_scores(retrieval_query, pool_n, chunks)
+    ordered_ids, ordered_scores = ranker.rank(raw_scores=raw_scores)
+    limited_ids = filter_retrieved_chunks(cfg, chunks, ordered_ids, limit=min(len(ordered_ids), candidate_limit))
+    return raw_scores, ordered_ids, ordered_scores, limited_ids, _build_candidate_map(ordered_ids, ordered_scores)
+
+
+def _normalize_subquestions(question: str, raw_subquestions: List[str], max_subquestions: int) -> List[str]:
+    seen = {question.strip().lower()}
+    normalized_subquestions: List[str] = []
+    for subquestion in raw_subquestions:
+        normalized = " ".join(subquestion.split()).strip()
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized_subquestions.append(normalized)
+        if len(normalized_subquestions) >= max_subquestions:
+            break
+    return normalized_subquestions
+
 def get_answer(
     question: str,
     cfg: RAGConfig,
@@ -154,7 +193,7 @@ def get_answer(
     golden_chunks: Optional[list] = None,
     is_test_mode: bool = False,
     additional_log_info: Optional[Dict[str, Any]] = None
-) -> Union[str, Tuple[str, List[Dict[str, Any]], Optional[str]]]:
+) -> Union[str, Tuple[str, List[Dict[str, Any]], Optional[str], Dict[str, Any]]]:
     """
     Run a single query through the pipeline.
     """    
@@ -175,19 +214,27 @@ def get_answer(
     
     semantic_hit = cache.lookup(config_cache_key, question_embedding, normalized_question)
 
+    retrieval_debug: Dict[str, Any] = {}
+
     # Return cached answer if found
     if semantic_hit is not None:
 
         ans = semantic_hit.get("answer", "")
 
         if is_test_mode:
-            return ans, semantic_hit.get("chunks_info"), semantic_hit.get("hyde_query")
+            return (
+                ans,
+                semantic_hit.get("chunks_info"),
+                semantic_hit.get("hyde_query"),
+                semantic_hit.get("retrieval_debug", {}),
+            )
         console.print("Using cached answer")
         render_final_answer(console, ans)
         return ans
 
     # Step 1: Get chunks (golden, retrieved, or none)
     chunks_info = None
+    rerank_diagnostics: Dict[str, Any] = {}
     hyde_query = None
     if golden_chunks and cfg.use_golden_chunks:
         # Use provided golden chunks
@@ -198,53 +245,129 @@ def get_answer(
     elif cfg.use_indexed_chunks:
         ranked_chunks, topk_idxs = use_indexed_chunks(question, chunks, cfg, args)
     else:
-        retrieval_query = question
-        # print(f"Retrieval query: {retrieval_query}")
-        if cfg.use_hyde:
-            retrieval_query = generate_hypothetical_document(question, cfg.gen_model, max_tokens=cfg.hyde_max_tokens)
+        raw_scores: Dict[str, Dict[int, float]]
+        subquestions: List[str] = []
+        query_candidate_runs: List[Dict[str, Any]] = []
 
-        pool_n = max(cfg.num_candidates, cfg.top_k + 10)
-        raw_scores: Dict[str, Dict[int, float]] = {}
-        for retriever in retrievers:
-            # print(f"Getting scores from retriever: {retriever.name}...")
-            raw_scores[retriever.name] = retriever.get_scores(retrieval_query, pool_n, chunks)
-        # TODO: Fix retrieval logging.
+        if cfg.rerank_mode == "decompose_then_coverage_mmr":
+            raw_subquestions = decompose_complex_query(question, cfg.gen_model)
+            subquestions = _normalize_subquestions(question, raw_subquestions, cfg.decomposition_max_subquestions)
+            query_list = [question, *subquestions] if subquestions else [question]
+            merged_score_map: Dict[int, float] = {}
+            merged_raw_scores: Dict[str, Dict[int, float]] = {}
+            for retrieval_query in query_list:
+                candidate_limit = cfg.decomposition_candidate_pool
+                query_raw_scores, ordered, ordered_scores, limited_ids, fused_score_map = _retrieve_ranked_candidates(
+                    retrieval_query,
+                    cfg,
+                    chunks,
+                    retrievers,
+                    ranker,
+                    candidate_limit=candidate_limit,
+                )
+                query_candidate_runs.append({
+                    "query": retrieval_query,
+                    "candidate_ids": limited_ids,
+                    "candidate_scores": [float(fused_score_map.get(chunk_id, 0.0)) for chunk_id in limited_ids],
+                })
 
-        # print("Raw scores from retrievers:")
-        # for retriever_name, score_dict in raw_scores.items():
-        #     print(f"  {retriever_name}: {list(score_dict.values())}")
-        # Step 2: Ranking
-        ordered, scores = ranker.rank(raw_scores=raw_scores)
-        # print(f"Ordered candidate indices after ranking: {ordered[:cfg.top_k]}")
-        # print(f"Corresponding scores: {scores[:cfg.top_k]}")
-        topk_idxs = filter_retrieved_chunks(cfg, chunks, ordered)
-        ranked_chunks = [chunks[i] for i in topk_idxs]
-        # print(f"Top-{cfg.top_k} chunk indices after filtering: {topk_idxs}")
-        # print("Len Ranked chunks:", len(ranked_chunks))
-        # print("Example ranked chunk content:", ranked_chunks[0] if ranked_chunks else "No chunks retrieved")
-        
-        
+                for retriever_name, score_map in query_raw_scores.items():
+                    merged_raw_scores.setdefault(retriever_name, {})
+                    for chunk_id, score in score_map.items():
+                        current = merged_raw_scores[retriever_name].get(chunk_id, float("-inf"))
+                        if score > current:
+                            merged_raw_scores[retriever_name][chunk_id] = score
+
+                if cfg.decomposition_merge_strategy == "union_max":
+                    for chunk_id in limited_ids:
+                        merged_score_map[chunk_id] = max(
+                            merged_score_map.get(chunk_id, float("-inf")),
+                            fused_score_map.get(chunk_id, 0.0),
+                        )
+
+            ordered = [chunk_id for chunk_id, _score in sorted(merged_score_map.items(), key=lambda item: item[1], reverse=True)]
+            scores = [merged_score_map[chunk_id] for chunk_id in ordered]
+            candidate_pool_size = min(len(ordered), cfg.get_rerank_candidate_pool_size())
+            topk_idxs = filter_retrieved_chunks(cfg, chunks, ordered, limit=candidate_pool_size)
+            ranked_chunks = [chunks[i] for i in topk_idxs]
+            raw_scores = merged_raw_scores
+            retrieval_debug = {
+                "retrieval_mode": "decompose_then_merge",
+                "subquestions": subquestions,
+                "query_candidate_runs": query_candidate_runs,
+                "merged_candidate_pool_size": len(ordered),
+                "selected_candidate_pool_size": len(topk_idxs),
+            }
+        else:
+            retrieval_query = question
+            if cfg.use_hyde:
+                retrieval_query = generate_hypothetical_document(question, cfg.gen_model, max_tokens=cfg.hyde_max_tokens)
+                hyde_query = retrieval_query
+
+            candidate_pool_size = cfg.get_rerank_candidate_pool_size()
+            raw_scores, ordered, scores, topk_idxs, _ = _retrieve_ranked_candidates(
+                retrieval_query,
+                cfg,
+                chunks,
+                retrievers,
+                ranker,
+                candidate_limit=candidate_pool_size,
+            )
+            ranked_chunks = [chunks[i] for i in topk_idxs]
+            retrieval_debug = {
+                "retrieval_mode": "single_query",
+                "subquestions": [],
+                "query_candidate_runs": [{
+                    "query": retrieval_query,
+                    "candidate_ids": topk_idxs,
+                    "candidate_scores": [float(score) for score in scores[:len(topk_idxs)]],
+                }],
+                "merged_candidate_pool_size": len(ordered),
+                "selected_candidate_pool_size": len(topk_idxs),
+            }
+
+        # Step 3: Final re-ranking
+        reranked, rerank_diagnostics = rerank(
+            question,
+            ranked_chunks,
+            mode=cfg.rerank_mode,
+            top_n=cfg.rerank_top_k,
+            coverage_mmr_lambda=cfg.coverage_mmr_lambda,
+            coverage_subquestion_weight=cfg.coverage_subquestion_weight,
+            subquestions=subquestions,
+            embed_model_path=cfg.embed_model,
+            return_diagnostics=True,
+        )
+        selected_local_indices = rerank_diagnostics.get("selected_indices", [])
+        if selected_local_indices:
+            topk_idxs = [topk_idxs[i] for i in selected_local_indices if 0 <= i < len(topk_idxs)]
+        ranked_chunks = reranked
+        retrieval_debug["selected_chunk_ids"] = topk_idxs
+        retrieval_debug["rerank_diagnostics"] = rerank_diagnostics
+
         # Capture chunk info if in test mode
         if is_test_mode:
             # Compute individual ranker ranks
             faiss_scores = raw_scores.get("faiss", {})
             bm25_scores = raw_scores.get("bm25", {})
             index_scores = raw_scores.get("index_keywords", {})
-            
+
             faiss_ranked = sorted(faiss_scores.keys(), key=lambda i: faiss_scores[i], reverse=True)
             bm25_ranked = sorted(bm25_scores.keys(), key=lambda i: bm25_scores[i], reverse=True)
             index_ranked = sorted(index_scores.keys(), key=lambda i: index_scores[i], reverse=True)
-            
+
             faiss_ranks = {idx: rank + 1 for rank, idx in enumerate(faiss_ranked)}
             bm25_ranks = {idx: rank + 1 for rank, idx in enumerate(bm25_ranked)}
             index_ranks = {idx: rank + 1 for rank, idx in enumerate(index_ranked)}
-            
+
             chunks_info = []
+            meta = artifacts.get("meta", [])
             for rank, idx in enumerate(topk_idxs, 1):
                 chunks_info.append({
                     "rank": rank,
                     "chunk_id": idx,
                     "content": chunks[idx],
+                    "page_numbers": meta[idx].get("page_numbers", []) if 0 <= idx < len(meta) else [],
                     "faiss_score": faiss_scores.get(idx, 0),
                     "faiss_rank": faiss_ranks.get(idx, 0),
                     "bm25_score": bm25_scores.get(idx, 0),
@@ -252,9 +375,6 @@ def get_answer(
                     "index_score": index_scores.get(idx, 0),
                     "index_rank": index_ranks.get(idx, 0),
                 })
-
-        # Step 3: Final re-ranking
-        ranked_chunks = rerank(question, ranked_chunks, mode=cfg.rerank_mode, top_n=cfg.rerank_top_k)
         # print("Reranked Chunks", type(ranked_chunks), len(ranked_chunks), type(ranked_chunks[0]) if ranked_chunks else "No chunks")
         # print("Example reranked chunk content:", ranked_chunks[0] if ranked_chunks else "No chunks after reranking")
 
@@ -294,6 +414,10 @@ def get_answer(
         # Logging
         meta = artifacts.get("meta", [])
         page_nums = get_page_numbers(topk_idxs, meta)
+        log_details = dict(additional_log_info or {})
+        log_details["rerank_mode"] = cfg.rerank_mode
+        log_details["rerank_diagnostics"] = rerank_diagnostics
+
         logger.save_chat_log(
             query=question,
             config_state=cfg.get_config_state(),
@@ -308,7 +432,7 @@ def get_answer(
             page_map=page_nums,
             full_response=ans,
             top_k=len(topk_idxs),
-            additional_log_info=additional_log_info
+            additional_log_info=log_details
         )
 
     # Step 5: Store in semantic cache
@@ -317,6 +441,7 @@ def get_answer(
         "chunks_info": chunks_info,
         "hyde_query": hyde_query,
         "chunk_indices": topk_idxs,
+        "retrieval_debug": retrieval_debug,
     }
     if question_embedding is None:
         question_embedding = cache.compute_embedding(normalized_question, retrievers, cfg.embed_model)
@@ -328,7 +453,7 @@ def get_answer(
     )
 
     if is_test_mode:
-        return ans, chunks_info, hyde_query
+        return ans, chunks_info, hyde_query, retrieval_debug
     
     return ans
 

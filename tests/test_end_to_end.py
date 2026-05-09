@@ -93,7 +93,7 @@ def test_end_to_end_pipeline_stubbed():
         question = "What is Python?"
         
         # First, run in test mode to inspect retrieval internals.
-        ans, chunks_info, hyde_query = get_answer(
+        ans, chunks_info, hyde_query, retrieval_debug = get_answer(
             question=question,
             cfg=cfg,
             args=args,
@@ -132,6 +132,7 @@ def test_end_to_end_pipeline_stubbed():
         # Top 2 should be 0 and 2 (order might depend on sort stability if equal, but they are top 2)
         
         assert len(chunks_info) == 2
+        assert retrieval_debug.get("retrieval_mode") == "single_query"
         retrieved_chunk_ids = {info["chunk_id"] for info in chunks_info}
         assert 0 in retrieved_chunk_ids
         assert 2 in retrieved_chunk_ids
@@ -156,4 +157,3 @@ def test_end_to_end_pipeline_stubbed():
         # Note: chunks might be passed exactly as they are in the 'chunks' list
         assert any("Python is a programming language." in c for c in passed_chunks)
         assert any("Machine learning uses statistics." in c for c in passed_chunks)
-

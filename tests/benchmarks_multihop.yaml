@@ -1,0 +1,28 @@
+benchmarks:
+  - id: "aries_atomicity"
+    question: "How does the recovery manager use ARIES to ensure atomicity"
+    expected_answer: "The ARIES recovery algorithm ensures atomicity by maintaining a write-ahead log where all updates are recorded before being applied to the database, with each log record containing transaction ID, data item, old value, and new value. During normal operation, log records are written to stable storage before the transaction commits; if a transaction aborts or the system crashes, the recovery manager uses the log to undo uncommitted transactions by applying the old values in reverse order, ensuring that partial effects of incomplete transactions are completely rolled back and the all-or-nothing property of atomicity is preserved."
+    keywords: ["ARIES", "write-ahead log", "undo", "rollback", "stable storage", "atomicity"]
+    similarity_threshold: 0.75
+    ideal_retrieved_chunks: [1355, 1356, 1358, 1353, 1359]
+
+  - id: "sql_isolation"
+    question: "What isolation guarantees does SQL provide by default?"
+    expected_answer: "Serializable. In the SQL standard, the default isolation level is Serializable, which guarantees that the outcome of concurrently executing transactions is equivalent to some serial (one-at-a-time) order of those transactions—thereby preventing dirty reads, nonrepeatable reads, and phantoms."
+    keywords: ["serializable", "dirty read", "nonrepeatable read", "phantom", "two-phase locking"]
+    similarity_threshold: 0.7
+    ideal_retrieved_chunks: [1173, 1174, 1142, 1143, 1172]
+
+  - id: "oltp_vs_analytics"
+    question: "Contrast the goals of Online Transaction Processing and data analytics"
+    expected_answer: "Online Transaction Processing (OLTP) supports a large number of concurrent users performing small, fast transactions that retrieve and update relatively small amounts of data with requirements for high throughput, low latency, and immediate consistency, typically using normalized schemas optimized for transactional integrity. Data analytics, in contrast, processes large volumes of historical data to draw conclusions and infer patterns for business intelligence and decision support, involving complex queries that scan and aggregate data across many records, often using denormalized schemas like star schemas in data warehouses optimized for read-heavy analytical workloads rather than transactional updates."
+    keywords: ["OLTP", "data analytics", "business intelligence", "throughput", "data warehouse", "analytical"]
+    similarity_threshold: 0.73
+    ideal_retrieved_chunks: [33, 34, 738, 739, 741]
+
+  - id: "lossy_decomposition"
+    question: "Show me what happens during a lossy decomposition"
+    expected_answer: "A lossy decomposition occurs when a relation R is decomposed into smaller relations R1 and R2 such that joining them back together produces spurious tuples not present in the original relation, resulting in loss of information about which attribute combinations actually existed. This happens when the intersection of R1 and R2 does not form a superkey for either relation, violating the lossless-join condition; the natural join of the decomposed relations generates extra tuples from invalid combinations, making it impossible to reconstruct the original data accurately, which is why database design insists that all decompositions must be lossless."
+    keywords: ["lossy decomposition", "spurious tuples", "lossless join", "superkey", "natural join"]
+    similarity_threshold: 0.70
+    ideal_retrieved_chunks: [431, 430, 432, 433, 440]

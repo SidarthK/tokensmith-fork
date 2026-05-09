@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import inspect
 from dataclasses import dataclass, field
 from typing import Dict
 
@@ -29,10 +30,19 @@ class RAGConfig:
     )
     rerank_mode: str = ""
     rerank_top_k: int = 5
+    rerank_candidate_pool: int = 20
+    coverage_mmr_candidate_pool: int = 40
+    coverage_mmr_lambda: float = 0.7
+    coverage_mmr_similarity_metric: str = "cosine"
+    use_query_decomposition: bool = False
+    decomposition_max_subquestions: int = 4
+    decomposition_candidate_pool: int = 12
+    decomposition_merge_strategy: str = "union_max"
+    coverage_subquestion_weight: float = 0.35
 
     # generation
     max_gen_tokens: int = 400
-    gen_model: str = "models/generators/qwen2.5-3b-instruct-q8_0.gguf"
+    gen_model: str = "models/generators/qwen2.5-1.5b-instruct-q8_0.gguf"
     
     # testing
     system_prompt_mode: str = "baseline"
@@ -68,17 +78,46 @@ class RAGConfig:
     def from_yaml(cls, path: os.PathLike) -> RAGConfig:
         with open(path, 'r') as f:
             data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            data = {}
+
+        # Accept older config files after merges/refactors.
+        if "chunk_size" in data and "chunk_size_in_chars" not in data:
+            data["chunk_size_in_chars"] = data.pop("chunk_size")
+        if "model_path" in data and "gen_model" not in data:
+            data["gen_model"] = data.pop("model_path")
+
+        valid_fields = set(inspect.signature(cls).parameters.keys())
+        data = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**data)
 
     def __post_init__(self):
         """Validation logic runs automatically after initialization."""
         assert self.top_k > 0, "top_k must be > 0"
         assert self.num_candidates >= self.top_k, "num_candidates must be >= top_k"
-        assert self.ensemble_method.lower() in {"linear", "weighted", "rrf"}
-        assert self.embedding_model_context_window > 0, "embedding_model_context_window must be > 0"
-        if self.ensemble_method.lower() in {"linear", "weighted"}:
+        assert self.ensemble_method.lower() in {"linear","weighted","rrf"}
+        assert self.rerank_top_k > 0, "rerank_top_k must be > 0"
+        assert self.rerank_candidate_pool >= self.rerank_top_k, \
+            "rerank_candidate_pool must be >= rerank_top_k"
+        assert self.coverage_mmr_candidate_pool >= self.rerank_top_k, \
+            "coverage_mmr_candidate_pool must be >= rerank_top_k"
+        assert self.rerank_mode in {"", "none", "cross_encoder", "coverage_mmr", "decompose_then_coverage_mmr"}, \
+            "rerank_mode must be one of: '', none, cross_encoder, coverage_mmr, decompose_then_coverage_mmr"
+        assert 0.0 <= self.coverage_mmr_lambda <= 1.0, "coverage_mmr_lambda must be in [0, 1]"
+        assert self.coverage_mmr_similarity_metric in {"cosine"}, \
+            "coverage_mmr_similarity_metric currently supports only 'cosine'"
+        assert self.decomposition_max_subquestions > 0, "decomposition_max_subquestions must be > 0"
+        assert self.decomposition_candidate_pool >= self.rerank_top_k, \
+            "decomposition_candidate_pool must be >= rerank_top_k"
+        assert self.decomposition_merge_strategy in {"union_max"}, \
+            "decomposition_merge_strategy currently supports only 'union_max'"
+        assert 0.0 <= self.coverage_subquestion_weight <= 1.0, \
+            "coverage_subquestion_weight must be in [0, 1]"
+        if self.ensemble_method.lower() in {"linear","weighted"}:
             s = sum(self.ranker_weights.values()) or 1.0
             self.ranker_weights = {k: v / s for k, v in self.ranker_weights.items()}
+        if self.rerank_mode == "decompose_then_coverage_mmr":
+            self.use_query_decomposition = True
         self.chunk_config = self.get_chunk_config()
         self.chunk_config.validate()
 
@@ -131,6 +170,19 @@ class RAGConfig:
     def get_page_to_chunk_map_path(self, artifacts_dir: os.PathLike, index_prefix: str) -> os.PathLike:
         """Returns the path to the page-to-chunk map file."""
         return pathlib.Path(artifacts_dir) / f"{index_prefix}_page_to_chunk_map.json"
+
+    def get_rerank_candidate_pool_size(self, requested_top_k: int | None = None) -> int:
+        effective_top_k = self.top_k if requested_top_k is None else requested_top_k
+        base_pool = max(self.rerank_candidate_pool, self.rerank_top_k, effective_top_k)
+        if self.rerank_mode == "coverage_mmr":
+            return max(base_pool, self.coverage_mmr_candidate_pool, self.rerank_top_k * 6)
+        if self.rerank_mode == "decompose_then_coverage_mmr":
+            return max(
+                base_pool,
+                self.coverage_mmr_candidate_pool,
+                self.decomposition_candidate_pool * max(self.decomposition_max_subquestions, 2),
+            )
+        return base_pool
     
     def get_config_state(self) -> None:
         """Returns dict of all config parameters except chunk_config """

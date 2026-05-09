@@ -81,11 +81,8 @@ class RunLogger:
                 "full_response": full_response
             }
         if additional_log_info:
-            for key in additional_log_info:
-                if key in log_data:
-                    print(f"Warning: Key '{key}' in additional_log_info conflicts with existing log data keys. Skipping this key.")
-                else:
-                    log_data[key] = additional_log_info[key]
+            # Keep diagnostic payloads grouped for easier downstream analysis.
+            log_data["diagnostics"] = additional_log_info
                     
         log_file = self.logs_dir / f"{log_id}.json"
         
@@ -100,7 +97,6 @@ def get_logger():
     if _INSTANCE is None:
         _INSTANCE = RunLogger()
     return _INSTANCE
-
 
 
 
